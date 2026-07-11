@@ -70,5 +70,6 @@ Status: **in progress**. This file records sanitized infrastructure and live-pat
 
 - A live message above the configured inbound limit received the Worker's permanent SMTP size rejection.
 - The rejected message did not appear in the polling API and therefore did not proceed to persistence or parsing.
+- A separate just-below-limit live message was accepted and reached `parse_status: ready` in the deployed Worker.
+- Its attachment byte count and stored checksum matched after retrieval without opening the content.
 - Exact message and attachment sizes are deliberately not retained in this evidence file.
-- A just-below-limit live message must still be accepted, stored byte-for-byte, and parsed within deployed CPU and memory limits.

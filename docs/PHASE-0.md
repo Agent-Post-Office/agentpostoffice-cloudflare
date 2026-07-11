@@ -2,7 +2,7 @@
 
 Status: **in progress**. Local tests are green; active-recipient inbound receipt, external delivery, authentication, direct send, and threaded reply are proven. Failure semantics, boundary MIME cases, and delivery observability remain incomplete.
 
-Current result: **4 passed, 8 partial, 2 pending**. A partial result does not satisfy Phase 0 completion.
+Current result: **5 passed, 7 partial, 2 pending**. A partial result does not satisfy Phase 0 completion.
 
 Run this checklist on a disposable domain or subdomain. Save sanitized evidence under `docs/phase-0-results/YYYY-MM-DD-domain.md`. Never record API tokens, Agent Post Office bearer tokens, subjects, bodies, attachments, or complete sender/recipient addresses.
 
@@ -13,10 +13,10 @@ Run this checklist on a disposable domain or subdomain. Save sanitized evidence 
 | Domain routing | Active recipient accepted; unknown and disabled recipients rejected by the catch-all Worker. | 🟡 Partial — active-recipient SMTP passed; unknown and disabled recipient SMTP tests remain. |
 | Outbound eligibility | Arbitrary unverified recipient send on Workers Paid returns a message ID; entitlement errors recorded safely. | ✅ Passed — direct send returned a provider ID and external delivery succeeded; the pre-onboarding entitlement failure was recorded safely. |
 | Outbound authentication | External header analysis shows SPF, DKIM, and DMARC pass. | ✅ Passed — sanitized external header inspection confirmed all three. |
-| MIME fidelity | Byte hashes match for small, multipart, non-UTF-8, attachment-heavy, and near-10-MiB raw messages. | 🟡 Partial — live multipart/HTML and binary-attachment paths passed, and an above-limit message was rejected before persistence; non-UTF-8, attachment-heavy, and just-below-limit byte comparison remain. |
+| MIME fidelity | Byte hashes match for small, multipart, non-UTF-8, attachment-heavy, and near-10-MiB raw messages. | 🟡 Partial — live multipart/HTML, binary-attachment, and just-below-limit paths passed, and an above-limit message was rejected before persistence; non-UTF-8 and attachment-heavy corpus checks remain. |
 | SMTP failure semantics | Injected R2, D1, and Queue failures establish rejection/retry/duplicate/orphan behavior and prove no premature SMTP success. | ⬜ Pending |
 | Queue idempotency | Redelivery adds no duplicate message/attachment rows; exhausted parse work becomes `parse_failed` with raw access. | 🟡 Partial — idempotent redelivery and `parse_failed` handling pass locally; live Queue/DLQ proof remains. |
-| Parser limits | Near-10-MiB parse stays inside the deployed Worker's CPU and memory limits. | 🟡 Partial — an above-limit message received the configured permanent SMTP rejection and created no stored message; just-below-limit acceptance and parsing remain. |
+| Parser limits | Near-10-MiB parse stays inside the deployed Worker's CPU and memory limits. | ✅ Passed — an above-limit message received the configured permanent SMTP rejection, while a just-below-limit message was accepted, parsed to `ready`, and preserved attachment bytes and checksum. |
 | Polling correctness | Client-crash, same-timestamp, and concurrent-arrival traversal shows no skipped IDs. | 🟡 Partial — same-timestamp keyset traversal passes locally and live poll/ack passed; crash and concurrent-arrival live traversal remain. |
 | Content safety | Raw/SVG/HTML/attachment downloads are attachments with `nosniff` and sandboxing; clients do not render/open them. | 🟡 Partial — local active-content tests plus live binary-attachment and HTML-message paths passed; live SVG remains. |
 | Inbound authentication source | Cloudflare-provided SPF/DKIM/DMARC source is distinguishable from sender-supplied headers, or fields remain omitted. | ✅ Passed — the API omits authentication-result fields rather than exposing sender-supplied headers as trusted results. |
