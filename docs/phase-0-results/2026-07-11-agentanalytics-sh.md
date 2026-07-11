@@ -1,6 +1,6 @@
 # Phase 0 partial evidence: 2026-07-11
 
-Status: **in progress**. This file records sanitized infrastructure, inbound, and outbound-acceptance evidence. It does not prove final outbound delivery.
+Status: **in progress**. This file records sanitized infrastructure and live-path conclusions. Exact recipients, subjects, bodies, attachments, sizes, checksums, timestamps, IPs, and transport identifiers are intentionally omitted.
 
 ## Inbound routing configuration
 
@@ -54,4 +54,13 @@ Status: **in progress**. This file records sanitized infrastructure, inbound, an
 - The pre-existing DMARC policy sent aggregate reports to a former provider. With explicit operator approval, that reporting destination was removed while preserving `p=reject`.
 - Cloudflare's authoritative nameserver returned the resulting single DMARC policy without the former reporting destination.
 - A fresh post-onboarding threaded reply was accepted and returned a Cloudflare provider message identifier.
-- This proves Cloudflare accepted the outbound handoff. It does not prove destination delivery, visible thread placement, or SPF/DKIM/DMARC results at the recipient.
+- Sanitized external inspection subsequently confirmed delivery, SPF, DKIM, DMARC, TLS transport, and correct reply-thread headers and conversation placement.
+- A separate direct send to an unverified external recipient was delivered successfully.
+
+## Sanitized attachment-safety conclusion
+
+- A non-sensitive binary attachment was parsed, stored privately, and downloaded without being opened.
+- Downloaded bytes matched the stored size and checksum.
+- The live response forced attachment disposition and returned `nosniff`, sandbox, and private no-store protections.
+- The CLI saved the file with owner-only permissions and refused to overwrite an existing path.
+- Exact message and attachment details are deliberately not retained in this evidence file. Live HTML/SVG active-content checks remain pending.

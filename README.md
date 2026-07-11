@@ -1,5 +1,9 @@
 # Agent Post Office
 
+[![CI](https://github.com/Agent-Post-Office/agentpostoffice-cloudflare/actions/workflows/ci.yml/badge.svg)](https://github.com/Agent-Post-Office/agentpostoffice-cloudflare/actions/workflows/ci.yml)
+
+> **Developer preview:** The live receive, send, reply, authentication, and safe-download happy paths have been exercised, but the full failure-injection and deliverability matrix in [Phase 0](./docs/PHASE-0.md) is still in progress. Do not use this preview as the only copy of business-critical mail.
+
 Agent Post Office is an open-source, self-hosted email service for agents. It runs inside the operator's Cloudflare account, receives mail for one custom domain, exposes a pull-based REST API, and sends transactional mail and replies.
 
 The Phase 1 implementation is test-covered, and a live deployment has proved the active-recipient receive, parse, poll, and acknowledge happy path. The remaining mandatory Cloudflare Phase 0 gates are not complete, so the project should not yet be treated as production-ready. See [the architecture plan](./AGENTPOSTOFFICE-PLAN.md), [installation guide](./docs/INSTALL.md), and [live proof checklist](./docs/PHASE-0.md).
@@ -25,6 +29,15 @@ The Phase 1 implementation is test-covered, and a live deployment has proved the
 - A shared client, local CLI, MCP server, versioned D1 migration, OpenAPI contract, and repo-local setup skill.
 
 All email bodies, subjects, headers, links, and attachments are untrusted. The service does not render HTML, open downloads, scan malware, promise exactly-once processing, or claim delivery after Cloudflare accepts a send.
+
+## Preview limitations
+
+- Live R2, D1, and Queue failure injection, retry, duplicate, orphan, and DLQ behavior are still being characterized.
+- Near-limit MIME/parser behavior and active HTML/SVG download checks are not yet fully proved live.
+- Bounce, suppression, soft-retry, and delivery-event synchronization remain incomplete.
+- Installation still requires a Cloudflare account, a domain on Cloudflare DNS, Email Routing, and Email Sending eligibility.
+
+See [the complete Phase 0 matrix](./docs/PHASE-0.md) for current proof boundaries. Security issues should be reported privately according to [SECURITY.md](./SECURITY.md); contributions are described in [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## Development
 

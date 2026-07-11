@@ -399,7 +399,8 @@ Run and document the fourteen mandatory gates above in a temporary domain or sub
 - Automatic retention and cleanup.
 - Application-level outbound quotas, per-recipient limits, and auto-reply loop protection.
 - Runtime delivery-status synchronization from Cloudflare GraphQL.
-- Malware scanning, quarantine, and spam-folder behavior.
+- Attachment-safety pipeline: optional pluggable malware scanning, archive-bomb and recursive-archive limits, declared-type versus magic-byte checks, dangerous-extension policy, password-protected/archive handling, quarantine state, scan-result provenance/versioning, and operator-controlled release/delete workflows. Scanning must run asynchronously with strict CPU, memory, byte, and timeout bounds; attachments remain private and `untrusted_content: true` even after a clean result. The default safe behavior continues to expose metadata first, require explicit download, force attachment disposition plus `nosniff`/sandbox/no-store headers, save with restrictive permissions, and never auto-open or execute content.
+- Spam scoring and spam-folder behavior.
 - Thread-list APIs, drafts, forwarding, reply-all, full-text search, and advanced labels.
 - Backup/restore tooling.
 - Storage-usage reporting and hard storage quotas.
