@@ -63,4 +63,5 @@ Status: **in progress**. This file records sanitized infrastructure and live-pat
 - Downloaded bytes matched the stored size and checksum.
 - The live response forced attachment disposition and returned `nosniff`, sandbox, and private no-store protections.
 - The CLI saved the file with owner-only permissions and refused to overwrite an existing path.
-- Exact message and attachment details are deliberately not retained in this evidence file. Live HTML/SVG active-content checks remain pending.
+- A separate live HTML message parsed successfully, remained marked untrusted, exposed no HTML through the normal message API, and was available only as a forced raw-message download with `nosniff`, sandbox, and private no-store protections.
+- Exact message and attachment details are deliberately not retained in this evidence file. The live SVG active-content check remains pending.
