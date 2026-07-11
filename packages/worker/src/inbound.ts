@@ -46,11 +46,18 @@ export async function handleInbound(message: ForwardableEmailMessage, env: Env):
   const sender = safeAddress(message.from);
   const subject = boundedHeader(message.headers.get("subject"), 998);
   const headers = selectedHeaders(message.headers);
+  const rawBytes = await new Response(message.raw).arrayBuffer();
+  if (rawBytes.byteLength !== message.rawSize) {
+    throw new Error("Inbound message size changed while reading the raw stream");
+  }
 
   // Infrastructure errors intentionally escape. Phase 0 must confirm Cloudflare
   // treats this as a temporary SMTP failure; setReject is reserved for permanent
   // policy failures such as unknown recipients and oversize messages.
-  await env.MAIL_BUCKET.put(rawR2Key, message.raw, {
+  // R2 rejects arbitrary ReadableStreams because they do not carry a known
+  // length. Materializing the already size-bounded message preserves exact
+  // bytes and gives R2 an accepted fixed-size body.
+  await env.MAIL_BUCKET.put(rawR2Key, rawBytes, {
     httpMetadata: { contentType: "message/rfc822" },
     customMetadata: { messageId, inboxId: inbox.id },
   });

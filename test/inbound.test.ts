@@ -26,6 +26,14 @@ describe("inbound SMTP acceptance boundary", () => {
     expect(harness.reject).not.toHaveBeenCalled();
   });
 
+  it("materializes the inbound stream to known-length bytes before R2 persistence", async () => {
+    const harness = inboundHarness();
+    await handleInbound(harness.message, harness.env);
+    const storedBody = harness.r2Put.mock.calls[0]?.[1];
+    expect(storedBody).toBeInstanceOf(ArrayBuffer);
+    expect(new TextDecoder().decode(storedBody as ArrayBuffer)).toBe("raw message");
+  });
+
   it("lets infrastructure failure escape instead of falsely acknowledging SMTP", async () => {
     const harness = inboundHarness({ queueFailure: new Error("queue unavailable") });
     await expect(handleInbound(harness.message, harness.env)).rejects.toThrow("queue unavailable");

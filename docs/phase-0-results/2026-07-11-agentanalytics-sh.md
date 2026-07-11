@@ -19,3 +19,12 @@ Status: **in progress**. This file contains infrastructure-state evidence only. 
 - A real inbound message must be received, polled, acknowledged, and checked for byte and authentication behavior.
 - Unknown and disabled recipient behavior must be exercised over SMTP.
 - Email Sending onboarding and every outbound, reply, failure-injection, parser-limit, and observability gate remain pending.
+
+## First live inbound attempts
+
+- Three non-sensitive test messages reached Cloudflare Email Routing.
+- Cloudflare reported SPF and DKIM pass, then a temporary Worker failure for each attempt.
+- Workers Observability identified the failure as R2 rejecting an arbitrary inbound `ReadableStream` without a known length.
+- The failure was reproduced with a new official Workers/R2 runtime test before implementation.
+- The Worker now materializes the already size-bounded stream into byte-exact fixed-size data before R2 persistence; the focused tests and full local suite pass.
+- A post-fix real inbound retry is still required before marking receipt as passed.
