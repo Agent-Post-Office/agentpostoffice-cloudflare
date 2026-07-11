@@ -97,23 +97,66 @@ The Worker binding is named `EMAIL`. It is unrestricted by destination because a
 ```bash
 npm run deploy
 npm --workspace @agentpostoffice/worker run migrate:remote
-npm run token:create -- --label default
 ```
 
-The raw `apo_...` token is displayed once. D1 receives only its SHA-256 digest, public key ID, label, scopes, optional expiry, and revocation state.
-
-Store it locally:
+There is no application token-management script, API, CLI, or MCP tool. The setup agent administers `api_keys` directly with Wrangler after generating the credential locally. The raw token must remain in a non-exported shell variable, must never be printed, and must never appear in a Wrangler command or SQL statement. Disable shell tracing before starting:
 
 ```bash
-node packages/cli/dist/index.js config set --url <worker-url> --token '<raw-token>'
+set +x
+APO_TOKEN="$(node --input-type=module -e '
+  import { randomBytes } from "node:crypto";
+  const keyId = randomBytes(8).toString("hex");
+  const secret = randomBytes(32).toString("base64url");
+  process.stdout.write(`apo_${keyId}_${secret}`);
+')"
+APO_KEY_ID="${APO_TOKEN#apo_}"
+APO_KEY_ID="${APO_KEY_ID%%_*}"
+APO_DIGEST="$(
+  printf '%s' "$APO_TOKEN" |
+  node --input-type=module -e '
+    import { createHash } from "node:crypto";
+    const chunks = [];
+    for await (const chunk of process.stdin) chunks.push(chunk);
+    process.stdout.write(createHash("sha256").update(Buffer.concat(chunks)).digest("hex"));
+  '
+)"
+APO_CREATED_AT="$(node -e 'process.stdout.write(new Date().toISOString())')"
+APO_SCOPES='["messages:read","messages:update","messages:reply","messages:send","messages:delete","inboxes:manage"]'
+
+npx wrangler d1 execute agentpostoffice --remote \
+  --config packages/worker/wrangler.jsonc \
+  --command "INSERT INTO api_keys (key_id, digest_sha256, label, scopes_json, expires_at, created_at, revoked_at) VALUES ('$APO_KEY_ID', '$APO_DIGEST', 'default', '$APO_SCOPES', NULL, '$APO_CREATED_AT', NULL);"
+
+printf '%s\n' "$APO_TOKEN" |
+  node packages/cli/dist/index.js config set \
+    --url https://agentpostoffice.example.workers.dev \
+    --token-stdin
+unset APO_TOKEN APO_KEY_ID APO_DIGEST APO_CREATED_AT APO_SCOPES
 node packages/cli/dist/index.js status
 ```
 
-List and revoke token metadata through direct Wrangler D1 administration:
+Only the digest and metadata cross the Wrangler/D1 boundary. The raw token moves through stdin directly into the operating-system credential store. Do not enable `set -x`, echo the shell variables, paste their values into chat, or retain them in evidence.
+
+List token metadata directly through Wrangler:
 
 ```bash
-npm run token:list
-npm run token:revoke -- --key-id <public-key-id>
+npx wrangler d1 execute agentpostoffice --remote \
+  --config packages/worker/wrangler.jsonc \
+  --command "SELECT key_id, label, scopes_json, expires_at, created_at, revoked_at FROM api_keys ORDER BY created_at DESC;"
+```
+
+To revoke, validate the public key ID locally before placing it in the SQL command:
+
+```bash
+APO_REVOKE_KEY_ID='<16-character-lowercase-hex-key-id>'
+if [[ "$APO_REVOKE_KEY_ID" =~ ^[a-f0-9]{16}$ ]]; then
+  npx wrangler d1 execute agentpostoffice --remote \
+    --config packages/worker/wrangler.jsonc \
+    --command "UPDATE api_keys SET revoked_at = datetime('now') WHERE key_id = '$APO_REVOKE_KEY_ID' AND revoked_at IS NULL;"
+else
+  echo 'Invalid key ID; no D1 command was run' >&2
+fi
+unset APO_REVOKE_KEY_ID
 ```
 
 ## 6. Create mailboxes before routing mail
@@ -203,9 +246,10 @@ Provide credentials through the MCP process environment:
   "args": ["/absolute/path/to/agentpostoffice/packages/mcp/dist/index.js"],
   "env": {
     "AGENTPOSTOFFICE_URL": "https://<worker-url>",
-    "AGENTPOSTOFFICE_TOKEN": "apo_<key-id>_<secret>"
+    "AGENTPOSTOFFICE_TOKEN": "apo_<key-id>_<secret>",
+    "AGENTPOSTOFFICE_DOWNLOAD_DIR": "/absolute/path/to/a/dedicated/download-directory"
   }
 }
 ```
 
-Use a narrower token when the MCP client does not need mailbox management or deletion.
+Use a narrower token when the MCP client does not need mailbox management or deletion. The download directory defaults to `~/Downloads/agentpostoffice`. MCP save tools require explicit confirmation, accept only a filename (not an absolute or nested path), and refuse to overwrite an existing file or symlink.

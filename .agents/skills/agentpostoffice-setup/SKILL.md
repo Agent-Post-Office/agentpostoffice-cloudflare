@@ -23,7 +23,7 @@ Work from the Agent Post Office monorepo root. Read `docs/INSTALL.md` and `docs/
 3. Ask the user to create a least-privilege Cloudflare token if none is available. Keep it outside the Worker and repository.
 4. Run `npm run config:generate -- --mail-domain <domain>`. Inspect the generated `packages/worker/wrangler.jsonc`; confirm D1, R2, Queue, DLQ, Worker, and binding names.
 5. Onboard Email Sending with current supported Cloudflare APIs. Show proposed SPF, DKIM, DMARC, bounce, and other DNS records before applying them.
-6. Deploy the Worker and apply remote migrations. Generate the first token with `npm run token:create -- --label default`; immediately store the raw value with the CLI and avoid repeating it.
+6. Deploy the Worker and apply remote migrations. Follow section 5 of `docs/INSTALL.md`: generate the first token in a non-exported local shell variable, insert only its digest and metadata with `wrangler d1 execute`, and pipe the raw token through `--token-stdin` directly into the OS keyring. Never print or repeat it. Before production use, have the operator configure or explicitly defer the budget and usage alerts in the README security roadmap.
 7. Create at least one operator-selected mailbox through the CLI before inbound routing. Never invent `support`, `contact`, or another local part.
 8. Show the proposed Email Routing/MX changes and catch-all-to-Worker rule. Apply only after explicit approval.
 9. Run all fourteen gates in `docs/PHASE-0.md`, including real inbound polling/acknowledgement, arbitrary-recipient send, threaded reply, failure injection, MIME hashes, DNS authentication, and delivery observability.

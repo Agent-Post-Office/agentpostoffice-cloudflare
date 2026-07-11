@@ -114,6 +114,42 @@ describe("REST API contract", () => {
     expect(row?.tombstoned_at).not.toBeNull();
   });
 
+  it("requeues a tombstoned message after a prior Queue admission failure", async () => {
+    await seedInbox();
+    await seedMessage("msg_delete_retry", "2026-07-10T10:00:00.000Z");
+
+    const failed = await api("/v1/messages/msg_delete_retry", { method: "DELETE" }, queueFailureEnv("send"));
+    expect(failed.status).toBe(500);
+
+    const retried = await api("/v1/messages/msg_delete_retry", { method: "DELETE" });
+
+    expect(retried.status).toBe(202);
+    expect(await retried.json()).toEqual({
+      data: { id: "msg_delete_retry", status: "deletion_queued" },
+    });
+  });
+
+  it("requeues existing tombstoned messages in a bulk deletion retry", async () => {
+    await seedInbox();
+    await seedMessage("msg_bulkretry", "2026-07-10T10:00:00.000Z");
+
+    const failed = await api("/v1/messages/bulk-delete", {
+      method: "POST",
+      body: JSON.stringify({ message_ids: ["msg_bulkretry", "msg_missing"] }),
+    }, queueFailureEnv("sendBatch"));
+    expect(failed.status).toBe(500);
+
+    const retried = await api("/v1/messages/bulk-delete", {
+      method: "POST",
+      body: JSON.stringify({ message_ids: ["msg_bulkretry", "msg_missing"] }),
+    });
+
+    expect(retried.status).toBe(202);
+    expect(await retried.json()).toEqual({
+      data: { status: "deletion_queued", message_ids: ["msg_bulkretry"] },
+    });
+  });
+
   it("streams raw mail as an attachment with active-content defenses", async () => {
     await seedInbox();
     await seedMessage("msg_raw", "2026-07-10T10:00:00.000Z", "messages/inb_test/msg_raw/raw.eml");
@@ -153,11 +189,25 @@ describe("REST API contract", () => {
   });
 });
 
-async function api(path: string, init: RequestInit = {}): Promise<Response> {
+async function api(path: string, init: RequestInit = {}, executionEnv = workerEnv): Promise<Response> {
   const headers = new Headers(init.headers);
   headers.set("Authorization", `Bearer ${token}`);
   if (init.body) headers.set("Content-Type", "application/json");
-  return handleApi(new Request(`https://worker.example${path}`, { ...init, headers }), workerEnv);
+  return handleApi(new Request(`https://worker.example${path}`, { ...init, headers }), executionEnv);
+}
+
+function queueFailureEnv(operation: "send" | "sendBatch"): Env {
+  return {
+    ...workerEnv,
+    MAIL_QUEUE: {
+      send: operation === "send"
+        ? async () => { throw new Error("queue unavailable"); }
+        : workerEnv.MAIL_QUEUE.send.bind(workerEnv.MAIL_QUEUE),
+      sendBatch: operation === "sendBatch"
+        ? async () => { throw new Error("queue unavailable"); }
+        : workerEnv.MAIL_QUEUE.sendBatch.bind(workerEnv.MAIL_QUEUE),
+    },
+  } as Env;
 }
 
 async function seedInbox(): Promise<void> {

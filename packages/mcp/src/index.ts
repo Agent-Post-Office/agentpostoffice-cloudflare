@@ -10,5 +10,9 @@ if (!baseUrl || !token) {
   process.exit(1);
 }
 
-const server = createAgentPostOfficeMcpServer(new AgentPostOfficeClient({ baseUrl, token }));
+const downloadDirectory = process.env.AGENTPOSTOFFICE_DOWNLOAD_DIR;
+const server = createAgentPostOfficeMcpServer(
+  new AgentPostOfficeClient({ baseUrl, token }),
+  downloadDirectory ? { downloadDirectory } : {},
+);
 await server.connect(new StdioServerTransport());

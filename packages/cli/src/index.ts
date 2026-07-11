@@ -2,7 +2,7 @@
 import { AgentPostOfficeClient, AgentPostOfficeError } from "@agentpostoffice/client";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import { configPath, getCredential, loadConfig, readConfig, saveConfig } from "./config.js";
+import { configPath, getCredential, loadConfig, readConfig, readTokenFromStdin, saveConfig } from "./config.js";
 
 interface ParsedArguments {
   positionals: string[];
@@ -17,7 +17,9 @@ async function main(): Promise<void> {
   if (resource === "config") {
     if (action === "set") {
       const url = flagString(parsed, "url", true);
-      const token = flagString(parsed, "token", true);
+      if (parsed.flags.has("token")) throw new Error("--token is unsafe; pipe the token through --token-stdin");
+      if (!flagBoolean(parsed, "token-stdin")) throw new Error("Usage: agentpostoffice config set --url <url> --token-stdin");
+      const token = await readTokenFromStdin();
       await saveConfig(url, token);
       print({ configured: true, url, credential_store: "operating-system keyring" });
       return;
@@ -174,7 +176,7 @@ function print(value: unknown): void {
 function printHelp(): void {
   process.stdout.write(`Agent Post Office CLI
 
-  config set --url URL --token TOKEN
+  config set --url URL --token-stdin
   config show
   status
   inboxes list|get|create|enable|disable

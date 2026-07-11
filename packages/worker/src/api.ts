@@ -243,9 +243,16 @@ async function updateMessage(request: Request, messageId: string, env: Env): Pro
 }
 
 async function deleteMessage(messageId: string, env: Env): Promise<Response> {
-  await getMessage(messageId, env);
+  const existing = await env.DB.prepare(
+    "SELECT id, tombstoned_at FROM messages WHERE id = ?",
+  ).bind(messageId).first<Pick<MessageRow, "id" | "tombstoned_at">>();
+  if (!existing) throw new HttpError(404, "not_found", "Message not found");
   const now = nowIso();
-  await env.DB.prepare("UPDATE messages SET tombstoned_at = ?, updated_at = ? WHERE id = ?").bind(now, now, messageId).run();
+  if (!existing.tombstoned_at) {
+    await env.DB.prepare("UPDATE messages SET tombstoned_at = ?, updated_at = ? WHERE id = ?").bind(now, now, messageId).run();
+  }
+  // A prior Queue admission failure must remain recoverable even though the
+  // tombstone already hides the content from normal reads.
   const task: QueueTask = { kind: "delete", messageId };
   await env.MAIL_QUEUE.send(task, { contentType: "json" });
   return json({ data: { id: messageId, status: "deletion_queued" } }, 202);
@@ -260,13 +267,20 @@ async function bulkDelete(request: Request, env: Env): Promise<Response> {
   if (!ids.every((id) => typeof id === "string" && /^msg_[a-z0-9]+$/i.test(id))) {
     throw new HttpError(400, "invalid_request", "message_ids contains an invalid ID");
   }
+  const placeholders = ids.map(() => "?").join(", ");
+  const existing = await env.DB.prepare(
+    `SELECT id FROM messages WHERE id IN (${placeholders})`,
+  ).bind(...ids).all<Pick<MessageRow, "id">>();
+  const existingSet = new Set(existing.results.map((row) => row.id));
+  const queuedIds = ids.filter((id): id is string => existingSet.has(id));
   const now = nowIso();
-  const statements = ids.map((id) => env.DB.prepare(
+  const statements = queuedIds.map((id) => env.DB.prepare(
     "UPDATE messages SET tombstoned_at = ?, updated_at = ? WHERE id = ? AND tombstoned_at IS NULL",
   ).bind(now, now, id));
-  const results = await env.DB.batch(statements);
-  const queuedIds = ids.filter((_, index) => (results[index]?.meta.changes ?? 0) > 0) as string[];
+  if (statements.length) await env.DB.batch(statements);
   if (queuedIds.length) {
+    // Re-enqueue existing tombstones so a partial prior failure cannot make
+    // retained message data unreachable from the deletion API.
     await env.MAIL_QUEUE.sendBatch(queuedIds.map((messageId) => ({
       body: { kind: "delete", messageId } satisfies QueueTask,
       contentType: "json" as const,

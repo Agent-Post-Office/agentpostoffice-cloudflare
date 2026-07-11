@@ -22,10 +22,7 @@
     "openapi:lint": "redocly lint packages/openapi/spec/openapi.yaml",
     "dev": "npm --workspace @agentpostoffice/worker run dev",
     "deploy": "npm --workspace @agentpostoffice/worker run deploy",
-    "config:generate": "tsx tools/configure.ts",
-    "token:create": "tsx tools/token.ts create",
-    "token:list": "tsx tools/token.ts list",
-    "token:revoke": "tsx tools/token.ts revoke"
+    "config:generate": "tsx tools/configure.ts"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "0.18.4",

@@ -1,13 +1,23 @@
 import type { AgentPostOfficeClient } from "@agentpostoffice/client";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { createHash } from "node:crypto";
+import { mkdir, realpath, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { isAbsolute, join, resolve } from "node:path";
 import { z } from "zod";
 
 const MAX_DOWNLOAD_BYTES = 10 * 1024 * 1024;
 
-export function createAgentPostOfficeMcpServer(client: AgentPostOfficeClient): McpServer {
+export interface McpServerOptions {
+  downloadDirectory?: string;
+}
+
+export function createAgentPostOfficeMcpServer(
+  client: AgentPostOfficeClient,
+  options: McpServerOptions = {},
+): McpServer {
   const server = new McpServer({ name: "agentpostoffice", version: "0.1.0" });
+  const downloadDirectory = resolve(options.downloadDirectory || join(homedir(), "Downloads", "agentpostoffice"));
 
   server.registerTool("list_inboxes", {
     description: "List configured Agent Post Office mailboxes.",
@@ -97,26 +107,31 @@ export function createAgentPostOfficeMcpServer(client: AgentPostOfficeClient): M
   });
 
   server.registerTool("save_raw_message", {
-    description: "Explicitly save untrusted RFC 822 bytes to a new local file without opening it.",
-    inputSchema: { message_id: z.string(), output_path: z.string().min(1) },
+    description: "Save untrusted RFC 822 bytes under the configured download directory after explicit confirmation.",
+    inputSchema: {
+      message_id: z.string(),
+      output_path: z.string().min(1),
+      confirmed: z.literal(true),
+    },
   }, async ({ message_id, output_path }) => {
-    const path = resolve(output_path);
+    const path = await safeDownloadPath(downloadDirectory, output_path);
     await saveDownload(await client.downloadRaw(message_id), path, MAX_DOWNLOAD_BYTES);
     return output({ saved: path, opened: false });
   });
 
   server.registerTool("save_attachment", {
-    description: "Explicitly save untrusted attachment bytes to a new local file without opening or executing it.",
+    description: "Save untrusted attachment bytes under the configured download directory after explicit confirmation.",
     inputSchema: {
       message_id: z.string(),
       attachment_id: z.string(),
       output_path: z.string().min(1),
       max_bytes: z.number().int().min(1).max(MAX_DOWNLOAD_BYTES).default(MAX_DOWNLOAD_BYTES),
+      confirmed: z.literal(true),
     },
   }, async ({ message_id, attachment_id, output_path, max_bytes }) => {
-    const path = resolve(output_path);
-    await saveDownload(await client.downloadAttachment(message_id, attachment_id), path, max_bytes);
-    return output({ saved: path, opened: false });
+    const path = await safeDownloadPath(downloadDirectory, output_path);
+    const checksum = await saveVerifiedAttachment(client, message_id, attachment_id, path, max_bytes);
+    return output({ saved: path, opened: false, verified_checksum_sha256: checksum });
   });
 
   server.registerTool("delete_message", {
@@ -132,13 +147,64 @@ export function createAgentPostOfficeMcpServer(client: AgentPostOfficeClient): M
   return server;
 }
 
+async function safeDownloadPath(downloadDirectory: string, requestedPath: string): Promise<string> {
+  // Email content can prompt-inject an agent, so the tool accepts a filename,
+  // never a caller-selected absolute path or directory traversal.
+  if (isAbsolute(requestedPath) || requestedPath === "." || requestedPath === ".." || /[\\/\0]/.test(requestedPath)) {
+    throw new Error("output_path must be a filename inside the configured download directory");
+  }
+  await mkdir(downloadDirectory, { recursive: true, mode: 0o700 });
+  const trustedRoot = await realpath(downloadDirectory);
+  return join(trustedRoot, requestedPath);
+}
+
 async function saveDownload(response: Response, path: string, maximum: number): Promise<void> {
+  const bytes = await readDownload(response, maximum);
+  await writeFile(path, bytes, { flag: "wx", mode: 0o600 });
+}
+
+async function saveVerifiedAttachment(
+  client: AgentPostOfficeClient,
+  messageId: string,
+  attachmentId: string,
+  path: string,
+  maximum: number,
+): Promise<string> {
+  const message = await client.getMessage(messageId);
+  const attachment = message.attachments.find((candidate) => candidate.id === attachmentId);
+  if (!attachment) throw new Error("Attachment metadata is missing");
+  if (!Number.isSafeInteger(attachment.size) || attachment.size < 0) {
+    throw new Error("Attachment metadata has an invalid size");
+  }
+  if (attachment.size > maximum) throw new Error(`Download exceeds ${maximum} bytes`);
+  if (!/^[a-f0-9]{64}$/i.test(attachment.checksum_sha256)) {
+    throw new Error("Attachment metadata has an invalid SHA-256 checksum");
+  }
+
+  const bytes = await readDownload(
+    await client.downloadAttachment(messageId, attachmentId),
+    maximum,
+  );
+  if (bytes.byteLength !== attachment.size) {
+    throw new Error("Attachment size does not match stored metadata");
+  }
+  const actualChecksum = createHash("sha256").update(bytes).digest("hex");
+  if (actualChecksum !== attachment.checksum_sha256.toLowerCase()) {
+    throw new Error("Attachment SHA-256 checksum does not match stored metadata");
+  }
+
+  // Verify hostile bytes before creating any caller-visible file. The final
+  // write remains atomic and create-only, so existing paths and symlinks fail.
+  await writeFile(path, bytes, { flag: "wx", mode: 0o600 });
+  return actualChecksum;
+}
+
+async function readDownload(response: Response, maximum: number): Promise<Uint8Array> {
   const declared = Number(response.headers.get("content-length") || "0");
   if (declared > maximum) throw new Error(`Download exceeds ${maximum} bytes`);
   const bytes = new Uint8Array(await response.arrayBuffer());
   if (bytes.byteLength > maximum) throw new Error(`Download exceeds ${maximum} bytes`);
-  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  await writeFile(path, bytes, { flag: "wx", mode: 0o600 });
+  return bytes;
 }
 
 function output(value: unknown) {

@@ -58,6 +58,26 @@ All email bodies, subjects, headers, links, and attachments are untrusted. The s
 
 See [the complete Phase 0 matrix](./docs/PHASE-0.md) for current proof boundaries. Security issues should be reported privately according to [SECURITY.md](./SECURITY.md); contributions are described in [CONTRIBUTING.md](./CONTRIBUTING.md).
 
+## Security roadmap and cost watch
+
+**APO-SEC-005 is an accepted MVP risk.** A public Worker can receive valid-looking invalid bearer tokens that still cause D1 lookups, and a known active mailbox can receive repeated large messages that consume Workers, R2, D1, and Queue resources. Application quotas, spam filtering, and automatic traffic blocking remain roadmap work rather than hidden MVP behavior.
+
+Roadmap items:
+
+- configurable per-domain and per-mailbox ingress/storage budgets;
+- platform or application rate limits for repeated authentication failures;
+- retention controls and operator-visible usage breakdowns;
+- tested emergency controls that distinguish API abuse from inbound-mail abuse without silently losing mail.
+
+Before production use, configure Cloudflare cost monitoring:
+
+1. Decide the maximum **usage-based overage** you are willing to pay in one billing cycle. Fixed-fee subscriptions are not included in Cloudflare's Billable Usage view.
+2. In Cloudflare, open **Manage Account > Billing > Billable Usage > Create budget alert**. Create at least three account-wide email alerts at roughly 50%, 80%, and 100% of that overage tolerance, and include a second operator address where practical. Cloudflare currently offers these alerts to pay-as-you-go accounts, not Enterprise contract accounts. See [Cloudflare's budget-alert instructions](https://developers.cloudflare.com/billing/manage/budget-alerts/).
+3. If the account's plan exposes per-product usage notifications, open **Notifications > Add > Billable Usage** and add thresholds for the available Workers, R2, D1, and Queues metrics. Product choices and thresholds depend on the plan and current Cloudflare UI; do not assume every metric is offered. See [usage-based billing notifications](https://developers.cloudflare.com/billing/understand/usage-based-billing/#usage-based-billing-notifications).
+4. Review **Billable Usage** weekly and filter the daily cost chart by Workers, R2, D1, and Queues. A sudden change in one product is more actionable than the account total alone. See [Cloudflare's billable-usage dashboard guide](https://developers.cloudflare.com/billing/manage/billable-usage/).
+
+Budget alerts are informational: they do not pause, cap, or stop usage. When an alert fires, identify the product and first spike date in Billable Usage, then inspect Workers request/error metrics, R2 storage and operations, D1 activity, and Queue backlog. Rotate an Agent Post Office token only when there is evidence of credential misuse. For inbound-mail abuse, disable only the affected mailbox when possible; pausing the Email Routing catch-all is an operator-approved emergency action because it affects every mailbox on the domain. Never copy message content or raw addresses into incident evidence.
+
 ## Development
 
 Requirements: Node.js 20+ and npm.
@@ -130,14 +150,9 @@ Deploy and bootstrap the local credential:
 ```bash
 npm run deploy
 npm --workspace @agentpostoffice/worker run migrate:remote
-npm run token:create -- --label default
-node packages/cli/dist/index.js config set \
-  --url https://agentpostoffice.example.workers.dev \
-  --token 'apo_<key-id>_<secret>'
-node packages/cli/dist/index.js status
 ```
 
-The raw application token is shown once. D1 stores only its digest and metadata; the CLI stores the raw token in the operating-system credential store.
+There is no token-management npm script or application API. Follow the agent-operated Wrangler procedure in [docs/INSTALL.md](./docs/INSTALL.md#5-deploy-migrate-and-create-an-application-token): generate the credential locally without printing it, insert only its digest and metadata into D1 with Wrangler, and pipe the raw value through `--token-stdin` directly into the operating-system credential store.
 
 Create every intended mailbox before routing mail:
 
@@ -212,20 +227,7 @@ Never reuse an idempotency key after a failed or uncertain attempt. `accepted` m
 | `E_RECIPIENT_NOT_ALLOWED` | Email Sending is not onboarded for arbitrary-recipient delivery, or the account lacks the required entitlement. Review onboarding and plan eligibility. |
 | A test is absent after an MX cutover | The sender may cache the previous MX for its TTL. Check Cloudflare's routing activity before assuming DNS failed. |
 
-Create the first application token after the remote migration:
-
-```bash
-npm run token:create -- --label default
-```
-
-Only the SHA-256 digest and metadata enter D1. The raw token is printed once. Store it in the OS credential store through the CLI:
-
-```bash
-npm run build
-node packages/cli/dist/index.js config set \
-  --url https://agentpostoffice.example.workers.dev \
-  --token 'apo_<key-id>_<secret>'
-```
+Create, list, scope, expire, and revoke application tokens through the agent-operated Wrangler D1 procedure in [docs/INSTALL.md](./docs/INSTALL.md#5-deploy-migrate-and-create-an-application-token). Agent Post Office application code only reads token rows. Raw tokens must never appear in command arguments, chat, logs, or evidence.
 
 ## Basic API use
 
@@ -252,10 +254,11 @@ Run the built server with credentials in its environment:
 ```bash
 AGENTPOSTOFFICE_URL=https://agentpostoffice.example.workers.dev \
 AGENTPOSTOFFICE_TOKEN='apo_<key-id>_<secret>' \
+AGENTPOSTOFFICE_DOWNLOAD_DIR="$HOME/Downloads/agentpostoffice" \
 node packages/mcp/dist/index.js
 ```
 
-MCP message output is labeled `untrusted_content: true`. Attachment tools return metadata only; the MCP server never opens attachment bytes.
+MCP message output is labeled `untrusted_content: true`. Attachment metadata can be inspected without downloading. The explicit save tools require `confirmed: true`, accept only a filename, and create a new `0600` file inside `AGENTPOSTOFFICE_DOWNLOAD_DIR`; they never open the saved bytes. Before creating an attachment file, MCP verifies the downloaded byte length and SHA-256 checksum against stored metadata. The download directory defaults to `~/Downloads/agentpostoffice`.
 
 ## Production status
 

@@ -14,7 +14,7 @@ Agent Post Office is single-operator, single-domain software. It is not a multi-
 
 ## Attachment handling
 
-Until the deferred scanning pipeline exists, integrations should inspect attachment metadata before downloading, enforce a local size allowlist, save to a newly created `0600` file, verify the recorded checksum, and never automatically render, execute, extract, or upload attachment bytes to another service. Active formats such as HTML and SVG, executables, scripts, office macros, and archives require explicit operator approval and an isolated inspection environment.
+Until the deferred scanning pipeline exists, integrations should inspect attachment metadata before downloading, enforce a local size allowlist, save to a newly created `0600` file, verify the recorded checksum, and never automatically render, execute, extract, or upload attachment bytes to another service. The MCP attachment-save tool enforces the size and SHA-256 checks before creating the local file. Active formats such as HTML and SVG, executables, scripts, office macros, and archives require explicit operator approval and an isolated inspection environment.
 
 Future malware scanning is defense in depth, not a trust decision. A clean verdict can be stale, incomplete, evaded, or produced by a failed/outdated engine. Scan results therefore need engine/signature provenance and explicit states such as `pending`, `clean`, `suspicious`, `malicious`, `error`, and `skipped`; all results must retain `untrusted_content: true`. Password-protected files, nested archives, archive bombs, scanner timeouts, and type/extension mismatches must fail closed into quarantine rather than being treated as clean.
 
