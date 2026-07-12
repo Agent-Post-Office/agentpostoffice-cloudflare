@@ -1,6 +1,7 @@
 {
   "files": [],
   "references": [
+    { "path": "./packages/sieve" },
     { "path": "./packages/worker" },
     { "path": "./packages/client" },
     { "path": "./packages/cli" },

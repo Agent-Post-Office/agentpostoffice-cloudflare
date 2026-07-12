@@ -8,7 +8,7 @@ This workflow is resumable and intentionally separates application resources fro
 2. Run `npx wrangler login`.
 3. Give your coding agent this prompt:
 
-   > Install Agent Post Office from `https://github.com/Agent-Post-Office/agentpostoffice-cloudflare` for `<your-domain>`. Create mailboxes `<your-mailboxes>`. Follow the repository's `agentpostoffice-setup` skill, use my existing Wrangler login, show me proposed changes, and ask before deployment, DNS/MX changes, Email Routing activation, Email Sending onboarding, or sending real mail. Do not ask me to paste API tokens into chat.
+   > Install Agent Post Office from `https://github.com/Agent-Post-Office/agentpostoffice-cloudflare` for `<your-domain>`. Create mailboxes `<your-mailboxes>`. Follow the repository's `agentpostoffice-setup` skill, use my existing Wrangler login, show me proposed changes, and ask before deployment, DNS/MX changes, Email Routing activation, or Email Sending onboarding. After the setup and live delivery checks pass, you are authorized to send exactly one non-sensitive installation-verification email from an active mailbox to `itworks@agentpostoffice.com`. Report the result without copying addresses or message content into evidence. This check may be counted once as an approximate verified installation; it does not subscribe me to future email. Ask before sending any other real mail. Do not ask me to paste API tokens into chat.
 
 The agent runs the checks, provisions or reuses resources, deploys the Worker, creates the selected mailboxes, and guides the live mail cutover. The remaining sections are the detailed reference and manual fallback.
 
@@ -121,7 +121,7 @@ APO_DIGEST="$(
   '
 )"
 APO_CREATED_AT="$(node -e 'process.stdout.write(new Date().toISOString())')"
-APO_SCOPES='["messages:read","messages:update","messages:reply","messages:send","messages:delete","inboxes:manage"]'
+APO_SCOPES='["messages:read","messages:update","messages:reply","messages:send","messages:delete","inboxes:manage","sieve:read","sieve:manage"]'
 
 npx wrangler d1 execute agentpostoffice --remote \
   --config packages/worker/wrangler.jsonc \
@@ -235,6 +235,21 @@ However, the current CLI cannot retrieve the exact generated Sending DKIM record
 Check Email Sending and Routing status, confirm public DNS, and send only operator-approved disposable test messages. A dedicated mail subdomain is safest when the apex already receives mail elsewhere; using the apex intentionally replaces its existing inbound provider.
 
 After activation, run every gate in [PHASE-0.md](./PHASE-0.md). Setup is incomplete until a real inbound message is visible through polling, explicitly acknowledged, and successfully replied to with correct threading.
+
+### Optional public installation verification
+
+When the copied agent prompt explicitly authorizes it, finish by sending exactly one non-sensitive message from an active mailbox to `itworks@agentpostoffice.com`:
+
+```bash
+node packages/cli/dist/index.js send \
+  --inbox <active-inbox-id> \
+  --to itworks@agentpostoffice.com \
+  --subject "Agent Post Office installation check" \
+  --text "This installation can send email." \
+  --idempotency-key <fresh-unique-key>
+```
+
+This verifies arbitrary-recipient sending and may contribute once to an approximate public **verified installations** count. It does not subscribe the sender to product news or marketing. Do not place personal data, credentials, infrastructure identifiers, or diagnostic logs in the message. Ask before sending if the operator used the manual instructions instead of the authorizing prompt above.
 
 ## 8. Configure MCP
 

@@ -161,7 +161,7 @@ async function deliver(
   ).run();
 
   try {
-    const result = await env.EMAIL.send({
+    const result = await sendEmail({
       to: mail.recipient,
       from: mail.inbox.display_name ? { email: fromAddress, name: mail.inbox.display_name } : fromAddress,
       subject: mail.subject,
@@ -169,7 +169,7 @@ async function deliver(
       ...(mail.html ? { html: mail.html } : {}),
       ...(mail.replyTo ? { replyTo: mail.replyTo } : {}),
       headers: mail.headers || {},
-    });
+    }, env);
     const response = { id: messageId, status: "accepted", cloudflare_message_id: result.messageId };
     try {
       await persistOutboundState(messageId, auth.keyId, endpoint, idempotencyKey, "accepted", response, result.messageId, env);
@@ -187,6 +187,69 @@ async function deliver(
     const response = { id: messageId, status: "failed", error: safeEmailError(error) };
     await persistOutboundState(messageId, auth.keyId, endpoint, idempotencyKey, "failed", response, null, env);
     return { status: 502, body: response };
+  }
+}
+
+export function sendEmail(
+  message: Parameters<Env["EMAIL"]["send"]>[0],
+  env: Env,
+): ReturnType<Env["EMAIL"]["send"]> {
+  return env.EMAIL.send(message);
+}
+
+export async function sendAutomationReply(
+  mail: {
+    inbox: InboxRow;
+    recipient: string;
+    subject: string;
+    text: string;
+    headers: Record<string, string>;
+  },
+  env: Env,
+): Promise<{ messageId: string; providerMessageId: string }> {
+  const messageId = newId("msg");
+  const now = nowIso();
+  const fromAddress = `${mail.inbox.local_part}@${mail.inbox.domain}`;
+  const parsedR2Key = `messages/${mail.inbox.id}/${messageId}/parsed.json`;
+  const excerpt = excerptUtf8(mail.text, positiveInteger(env.BODY_EXCERPT_BYTES, 8_192));
+  await env.MAIL_BUCKET.put(parsedR2Key, JSON.stringify({
+    text: mail.text,
+    html: null,
+    from: { address: fromAddress, name: mail.inbox.display_name },
+    to: [{ address: mail.recipient }],
+    replyTo: [],
+    subject: mail.subject,
+    messageId: null,
+    inReplyTo: mail.headers["In-Reply-To"] || null,
+    references: mail.headers.References || null,
+  }), { httpMetadata: { contentType: "application/json; charset=utf-8" } });
+  await env.DB.prepare(
+    `INSERT INTO messages (
+      id, inbox_id, direction, envelope_from, envelope_to, subject, text_excerpt, parsed_r2_key,
+      body_truncated, parse_status, agent_state, labels_json, headers_json,
+      outbound_status, received_at, created_at, updated_at
+    ) VALUES (?, ?, 'outbound', ?, ?, ?, ?, ?, ?, 'not_applicable', 'processed', '[]', ?, 'pending', ?, ?, ?)`,
+  ).bind(
+    messageId, mail.inbox.id, fromAddress, mail.recipient, mail.subject, excerpt.text, parsedR2Key,
+    excerpt.truncated ? 1 : 0, JSON.stringify(mail.headers), now, now, now,
+  ).run();
+  try {
+    const result = await sendEmail({
+      to: mail.recipient,
+      from: mail.inbox.display_name ? { email: fromAddress, name: mail.inbox.display_name } : fromAddress,
+      subject: mail.subject,
+      text: mail.text,
+      headers: mail.headers,
+    }, env);
+    await env.DB.prepare(
+      "UPDATE messages SET outbound_status = 'accepted', cloudflare_message_id = ?, sent_at = ?, updated_at = ? WHERE id = ?",
+    ).bind(result.messageId, nowIso(), nowIso(), messageId).run();
+    return { messageId, providerMessageId: result.messageId };
+  } catch (error) {
+    await env.DB.prepare(
+      "UPDATE messages SET outbound_status = 'failed', updated_at = ? WHERE id = ?",
+    ).bind(nowIso(), messageId).run();
+    throw error;
   }
 }
 

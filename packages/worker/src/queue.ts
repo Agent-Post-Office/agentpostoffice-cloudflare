@@ -1,13 +1,19 @@
 import PostalMime from "postal-mime";
+import { executeAutomationTask } from "./automation.js";
 import type { AttachmentRow, Env, MessageRow, QueueTask } from "./types.js";
 import { excerptUtf8, newId, nowIso, sha256Hex } from "./util.js";
 
 export async function handleQueue(batch: MessageBatch<QueueTask>, env: Env): Promise<void> {
   const isDlq = Boolean(env.DLQ_NAME && batch.queue === env.DLQ_NAME);
+  const isAutomationDlq = Boolean(env.AUTOMATION_DLQ_NAME && batch.queue === env.AUTOMATION_DLQ_NAME);
   for (const queued of batch.messages) {
     try {
-      if (isDlq && queued.body.kind === "parse") {
+      if (isAutomationDlq && queued.body.kind === "automate") {
+        await markAutomationFailed(queued.body, env);
+      } else if (isDlq && queued.body.kind === "parse") {
         await markParseFailed(queued.body.messageId, env);
+      } else if (queued.body.kind === "automate") {
+        await executeAutomationTask(queued.body, env);
       } else if (queued.body.kind === "parse") {
         await parseMessage(queued.body, env);
       } else {
@@ -102,6 +108,18 @@ export async function parseMessage(task: Extract<QueueTask, { kind: "parse" }>, 
   if (parsed.inReplyTo) headers["in-reply-to"] = parsed.inReplyTo;
   if (parsed.references) headers.references = parsed.references.slice(0, 8_192);
 
+  const activeScript = await env.DB.prepare(
+    "SELECT id, revision FROM sieve_scripts WHERE inbox_id = ? AND active = 1",
+  ).bind(row.inbox_id).first<{ id: string; revision: number }>();
+  if (activeScript) {
+    await env.AUTOMATION_QUEUE.send({
+      kind: "automate",
+      messageId: row.id,
+      scriptId: activeScript.id,
+      scriptRevision: activeScript.revision,
+    }, { contentType: "json" });
+  }
+
   await env.DB.prepare(
     `UPDATE messages SET subject = ?, reply_to = ?, text_excerpt = ?, body_truncated = ?,
       parsed_r2_key = ?, parse_status = 'ready', headers_json = ?, updated_at = ? WHERE id = ?`,
@@ -115,6 +133,12 @@ export async function parseMessage(task: Extract<QueueTask, { kind: "parse" }>, 
     nowIso(),
     row.id,
   ).run();
+}
+
+async function markAutomationFailed(task: Extract<QueueTask, { kind: "automate" }>, env: Env): Promise<void> {
+  await env.DB.prepare(
+    "UPDATE sieve_runs SET state = 'failed', error = 'automation_dlq', updated_at = ? WHERE message_id = ? AND script_id = ? AND script_revision = ? AND state = 'claimed'",
+  ).bind(nowIso(), task.messageId, task.scriptId, task.scriptRevision).run();
 }
 
 async function markParseFailed(messageId: string, env: Env): Promise<void> {

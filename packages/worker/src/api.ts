@@ -1,4 +1,5 @@
 import { authenticate, requireScope } from "./auth.js";
+import { compileSieve, evaluateSieve, SieveValidationError } from "@agentpostoffice/sieve";
 import { errorResponse, HttpError, json, readJson, requireString } from "./http.js";
 import { replyToMessage, sendNew } from "./outbound.js";
 import type { AttachmentRow, AuthContext, Env, InboxRow, MessageRow, QueueTask } from "./types.js";
@@ -10,6 +11,7 @@ import {
   normalizeLocalPart,
   nowIso,
   parseJsonArray,
+  sha256Hex,
 } from "./util.js";
 
 interface ParsedMessageDocument {
@@ -90,6 +92,10 @@ async function routeInboxes(
   }
 
   const inboxId = segments[0];
+  if (inboxId && segments[1] === "sieve") {
+    await getInbox(inboxId, env);
+    return routeSieve(request, inboxId, segments.slice(2), auth, env);
+  }
   if (!inboxId || segments.length !== 1) throw new HttpError(404, "not_found", "Route not found");
   if (request.method === "GET") {
     requireScope(auth, "messages:read");
@@ -108,6 +114,128 @@ async function routeInboxes(
     return json({ data: serializeInbox({ ...current, display_name: displayName, active, updated_at: updatedAt }) });
   }
   throw new HttpError(405, "method_not_allowed", "Method not allowed", { Allow: "GET, PATCH" });
+}
+
+interface SieveScriptRow {
+  id: string;
+  inbox_id: string;
+  name: string;
+  revision: number;
+  source: string;
+  source_sha256: string;
+  active: number;
+  created_at: string;
+  updated_at: string;
+}
+
+async function routeSieve(
+  request: Request,
+  inboxId: string,
+  segments: string[],
+  auth: AuthContext,
+  env: Env,
+): Promise<Response> {
+  if (segments.length === 0 && request.method === "GET") {
+    requireScope(auth, "sieve:read");
+    const result = await env.DB.prepare(
+      "SELECT id, inbox_id, name, revision, source, source_sha256, active, created_at, updated_at FROM sieve_scripts WHERE inbox_id = ? ORDER BY revision DESC",
+    ).bind(inboxId).all<SieveScriptRow>();
+    return json({ data: result.results.map(serializeSieveScript) });
+  }
+  if (segments[0] === "validate" && segments.length === 1 && request.method === "POST") {
+    requireScope(auth, "sieve:read");
+    const input = await readJson<Record<string, unknown>>(request, 70_000);
+    try { compileSieve(requireString(input.source, "source", 65_536)); } catch (error) {
+      if (error instanceof SieveValidationError) throw new HttpError(400, "invalid_sieve", String((error as Error).message));
+      throw error;
+    }
+    return json({ data: { valid: true, profile: "agentpostoffice-autoresponder-v1" } });
+  }
+  if (segments.length === 0 && request.method === "POST") {
+    requireScope(auth, "sieve:manage");
+    const input = await readJson<Record<string, unknown>>(request, 70_000);
+    const name = requireString(input.name, "name", 100);
+    const source = requireString(input.source, "source", 65_536);
+    let compiled;
+    try { compiled = compileSieve(source); } catch (error) {
+      if (error instanceof SieveValidationError) throw new HttpError(400, "invalid_sieve", String((error as Error).message));
+      throw error;
+    }
+    const latest = await env.DB.prepare("SELECT MAX(revision) AS revision FROM sieve_scripts WHERE inbox_id = ?")
+      .bind(inboxId).first<{ revision: number | null }>();
+    const revision = (latest?.revision || 0) + 1;
+    const now = nowIso();
+    const row: SieveScriptRow = {
+      id: newId("siv"), inbox_id: inboxId, name, revision, source,
+      source_sha256: await sha256Hex(source), active: 0, created_at: now, updated_at: now,
+    };
+    await env.DB.prepare(
+      `INSERT INTO sieve_scripts
+        (id, inbox_id, name, revision, source, compiled_ir_json, source_sha256, active, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+    ).bind(row.id, row.inbox_id, row.name, row.revision, row.source, JSON.stringify(compiled), row.source_sha256, now, now).run();
+    return json({ data: serializeSieveScript(row) }, 201);
+  }
+  if (segments.length === 0 && request.method === "DELETE") {
+    requireScope(auth, "sieve:manage");
+    await env.DB.prepare("UPDATE sieve_scripts SET active = 0, updated_at = ? WHERE inbox_id = ? AND active = 1")
+      .bind(nowIso(), inboxId).run();
+    return json({ data: { active: false } });
+  }
+  const scriptId = segments[0];
+  if (scriptId && segments[1] === "test" && segments.length === 2 && request.method === "POST") {
+    requireScope(auth, "sieve:read");
+    const input = await readJson<Record<string, unknown>>(request);
+    const messageId = requireString(input.message_id, "message_id", 128);
+    const script = await env.DB.prepare(
+      "SELECT id, inbox_id, name, revision, source, source_sha256, active, created_at, updated_at FROM sieve_scripts WHERE id = ? AND inbox_id = ?",
+    ).bind(scriptId, inboxId).first<SieveScriptRow>();
+    if (!script) throw new HttpError(404, "not_found", "Sieve script not found");
+    const message = await env.DB.prepare(
+      "SELECT * FROM messages WHERE id = ? AND inbox_id = ? AND direction = 'inbound' AND parse_status = 'ready' AND tombstoned_at IS NULL",
+    ).bind(messageId, inboxId).first<MessageRow>();
+    if (!message) throw new HttpError(404, "not_found", "Ready inbound message not found");
+    let headers: Record<string, string> = {};
+    try {
+      const parsed = JSON.parse(message.headers_json) as Record<string, unknown>;
+      headers = Object.fromEntries(Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
+    } catch { /* Stored header metadata is optional for a dry run. */ }
+    const plan = evaluateSieve(compileSieve(script.source), {
+      envelopeFrom: message.envelope_from,
+      envelopeTo: message.envelope_to,
+      headers: { subject: message.subject || "", ...headers },
+      size: 0,
+    });
+    return json({ data: { plan } });
+  }
+  if (scriptId && segments[1] === "activate" && segments.length === 2 && request.method === "POST") {
+    requireScope(auth, "sieve:manage");
+    const row = await env.DB.prepare(
+      "SELECT id, inbox_id, name, revision, source, source_sha256, active, created_at, updated_at FROM sieve_scripts WHERE id = ? AND inbox_id = ?",
+    ).bind(scriptId, inboxId).first<SieveScriptRow>();
+    if (!row) throw new HttpError(404, "not_found", "Sieve script not found");
+    const updatedAt = nowIso();
+    await env.DB.batch([
+      env.DB.prepare("UPDATE sieve_scripts SET active = 0, updated_at = ? WHERE inbox_id = ? AND active = 1").bind(updatedAt, inboxId),
+      env.DB.prepare("UPDATE sieve_scripts SET active = 1, updated_at = ? WHERE id = ? AND inbox_id = ?").bind(updatedAt, scriptId, inboxId),
+    ]);
+    return json({ data: serializeSieveScript({ ...row, active: 1, updated_at: updatedAt }) });
+  }
+  throw new HttpError(404, "not_found", "Route not found");
+}
+
+function serializeSieveScript(row: SieveScriptRow): Record<string, unknown> {
+  return {
+    id: row.id,
+    inbox_id: row.inbox_id,
+    name: row.name,
+    revision: row.revision,
+    source: row.source,
+    source_sha256: row.source_sha256,
+    active: row.active === 1,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
 }
 
 async function routeMessages(

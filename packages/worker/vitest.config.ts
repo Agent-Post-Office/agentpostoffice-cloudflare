@@ -3,6 +3,9 @@ import { defineConfig } from "vitest/config";
 import { join } from "node:path";
 
 export default defineConfig({
+  resolve: {
+    alias: { "@agentpostoffice/sieve": join(import.meta.dirname, "../sieve/src/index.ts") },
+  },
   plugins: [
     cloudflareTest(async () => ({
       wrangler: { configPath: join(import.meta.dirname, "wrangler.test.jsonc") },

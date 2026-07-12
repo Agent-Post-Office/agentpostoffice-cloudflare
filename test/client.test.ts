@@ -44,6 +44,28 @@ describe("AgentPostOfficeClient", () => {
     ]);
   });
 
+  it("manages Sieve revisions through mailbox-scoped endpoints", async () => {
+    const calls: Array<{ url: string; method: string }> = [];
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), method: init?.method || "GET" });
+      if (String(url).endsWith("/activate")) return Response.json({ data: { id: "siv_1", active: true } });
+      if (init?.method === "DELETE") return Response.json({ data: { active: false } });
+      if (String(url).endsWith("/validate")) return Response.json({ data: { valid: true, profile: "agentpostoffice-autoresponder-v1" } });
+      return Response.json({ data: { id: "siv_1", active: false } }, { status: 201 });
+    });
+    const client = new AgentPostOfficeClient({ baseUrl: "https://mail.example", token: "secret", fetch: fetchMock as typeof fetch });
+    await client.validateSieve("inb_1", "require [\"vacation\"];");
+    await client.createSieveRevision("inb_1", { name: "Welcome", source: "require [\"vacation\"];" });
+    await client.activateSieve("inb_1", "siv_1");
+    await client.disableSieve("inb_1");
+    expect(calls).toEqual([
+      { url: "https://mail.example/v1/inboxes/inb_1/sieve/validate", method: "POST" },
+      { url: "https://mail.example/v1/inboxes/inb_1/sieve", method: "POST" },
+      { url: "https://mail.example/v1/inboxes/inb_1/sieve/siv_1/activate", method: "POST" },
+      { url: "https://mail.example/v1/inboxes/inb_1/sieve", method: "DELETE" },
+    ]);
+  });
+
   it("surfaces stable API errors without leaking the token", async () => {
     const client = new AgentPostOfficeClient({
       baseUrl: "https://inbox.example",

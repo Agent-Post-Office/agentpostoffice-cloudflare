@@ -10,6 +10,8 @@ const databaseName = flags.get("database-name") || "agentpostoffice";
 const bucketName = flags.get("bucket-name") || "agentpostoffice-mail";
 const queueName = flags.get("queue-name") || "agentpostoffice-mail";
 const dlqName = flags.get("dlq-name") || "agentpostoffice-dlq";
+const automationQueueName = flags.get("automation-queue-name") || "agentpostoffice-automation";
+const automationDlqName = flags.get("automation-dlq-name") || "agentpostoffice-automation-dlq";
 const output = resolve(flags.get("output") || "packages/worker/wrangler.jsonc");
 
 await run(["wrangler", "whoami"]);
@@ -17,6 +19,8 @@ const databaseId = await ensureD1(databaseName);
 await ensureResource("r2 bucket", bucketName, ["r2", "bucket", "list"], ["r2", "bucket", "create", bucketName]);
 await ensureResource("queue", queueName, ["queues", "list"], ["queues", "create", queueName]);
 await ensureResource("queue", dlqName, ["queues", "list"], ["queues", "create", dlqName]);
+await ensureResource("queue", automationQueueName, ["queues", "list"], ["queues", "create", automationQueueName]);
+await ensureResource("queue", automationDlqName, ["queues", "list"], ["queues", "create", automationDlqName]);
 
 const configuration = {
   $schema: "../../node_modules/wrangler/config-schema.json",
@@ -31,14 +35,20 @@ const configuration = {
     MAX_INBOUND_BYTES: "10485760",
     BODY_EXCERPT_BYTES: "8192",
     DLQ_NAME: dlqName,
+    AUTOMATION_DLQ_NAME: automationDlqName,
   },
   d1_databases: [{ binding: "DB", database_name: databaseName, database_id: databaseId, migrations_dir: "migrations" }],
   r2_buckets: [{ binding: "MAIL_BUCKET", bucket_name: bucketName }],
   queues: {
-    producers: [{ binding: "MAIL_QUEUE", queue: queueName }],
+    producers: [
+      { binding: "MAIL_QUEUE", queue: queueName },
+      { binding: "AUTOMATION_QUEUE", queue: automationQueueName },
+    ],
     consumers: [
       { queue: queueName, max_batch_size: 10, max_batch_timeout: 5, max_retries: 5, dead_letter_queue: dlqName },
       { queue: dlqName, max_batch_size: 10, max_batch_timeout: 5 },
+      { queue: automationQueueName, max_batch_size: 10, max_batch_timeout: 5, max_retries: 3, dead_letter_queue: automationDlqName },
+      { queue: automationDlqName, max_batch_size: 10, max_batch_timeout: 5 },
     ],
   },
   send_email: [{ name: "EMAIL" }],

@@ -1,11 +1,11 @@
 ---
 name: agentpostoffice-setup
-description: Provision, resume, verify, or diagnose a self-hosted Agent Post Office deployment in the user's Cloudflare account. Use for Agent Post Office setup, D1/R2/Queue creation, Wrangler configuration, Email Sending onboarding, Email Routing catch-all activation, token creation, mailbox bootstrap, DNS review, or the mandatory live Phase 0 proof.
+description: Provision, upgrade, resume, verify, or diagnose self-hosted Agent Post Office deployments in the user's Cloudflare account. Use for Agent Post Office setup, multi-instance upgrades, D1/R2/Queue creation, Wrangler configuration, Email Sending onboarding, Email Routing catch-all activation, token creation, mailbox bootstrap, DNS review, or the mandatory live Phase 0 proof.
 ---
 
 # Agent Post Office setup
 
-Work from the Agent Post Office monorepo root. Read `docs/INSTALL.md` and `docs/PHASE-0.md` before live changes.
+Work from the Agent Post Office monorepo root. Read `docs/INSTALL.md` and `docs/PHASE-0.md` before initial setup or live mail changes. Read `docs/UPGRADING.md` before changing an existing deployment.
 
 ## Guardrails
 
@@ -27,8 +27,13 @@ Work from the Agent Post Office monorepo root. Read `docs/INSTALL.md` and `docs/
 7. Create at least one operator-selected mailbox through the CLI before inbound routing. Never invent `support`, `contact`, or another local part.
 8. Show the proposed Email Routing/MX changes and catch-all-to-Worker rule. Apply only after explicit approval.
 9. Run all fourteen gates in `docs/PHASE-0.md`, including real inbound polling/acknowledgement, arbitrary-recipient send, threaded reply, failure injection, MIME hashes, DNS authentication, and delivery observability.
-10. Write sanitized generated-ID evidence under `docs/phase-0-results/`. Mark setup complete only if every gate passes; otherwise revise the architecture or report the exact blocker.
+10. If the operator used the README prompt that explicitly authorizes the public installation check, send exactly one non-sensitive message from an active mailbox to `itworks@agentpostoffice.com` with a fresh idempotency key. This may be counted once as an approximate verified installation and is not consent for future email. Ask before sending when that explicit authorization is absent.
+11. Write sanitized generated-ID evidence under `docs/phase-0-results/`. Mark setup complete only if every gate passes; otherwise revise the architecture or report the exact blocker.
 
 ## Resuming
 
 Inspect the generated Wrangler config and live resource lists before running creation commands. Treat an existing resource with matching name and binding as reusable only after confirming its account, zone, and purpose. Reapply versioned migrations safely, then continue from the first unproven Phase 0 gate.
+
+## Upgrading multiple instances
+
+Use the ignored registry and one named Wrangler config per instance from `docs/UPGRADING.md`. Run the release preflight once, then upgrade instances serially. Verify identity, bindings, migration mode, dry run, deployment, health, and read-only authenticated smoke checks for one instance before touching the next. Stop the fleet rollout on any failure. Never store credentials or mail data in the registry, and never assume Worker rollback reverses D1.

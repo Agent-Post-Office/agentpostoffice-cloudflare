@@ -62,6 +62,84 @@ paths:
       responses:
         "200": { description: Updated mailbox, content: { application/json: { schema: { $ref: "#/components/schemas/InboxResponse" } } } }
         "4XX": { $ref: "#/components/responses/ClientError" }
+  /inboxes/{inbox_id}/sieve:
+    parameters:
+      - $ref: "#/components/parameters/InboxId"
+    get:
+      summary: List stored Sieve autoresponder revisions
+      operationId: listSieveScripts
+      responses:
+        "200": { description: Stored revisions, content: { application/json: { schema: { $ref: "#/components/schemas/SieveScriptList" } } } }
+        "4XX": { $ref: "#/components/responses/ClientError" }
+    post:
+      summary: Store an inactive validated Sieve revision
+      operationId: createSieveRevision
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, source]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 100 }
+                source: { type: string, maxLength: 65536 }
+      responses:
+        "201": { description: Inactive revision, content: { application/json: { schema: { $ref: "#/components/schemas/SieveScriptResponse" } } } }
+        "4XX": { $ref: "#/components/responses/ClientError" }
+    delete:
+      summary: Deactivate the active Sieve script
+      operationId: disableSieve
+      responses:
+        "200": { description: Sieve disabled }
+        "4XX": { $ref: "#/components/responses/ClientError" }
+  /inboxes/{inbox_id}/sieve/validate:
+    parameters:
+      - $ref: "#/components/parameters/InboxId"
+    post:
+      summary: Validate Sieve source without storing or executing it
+      operationId: validateSieve
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [source]
+              properties:
+                source: { type: string, maxLength: 65536 }
+      responses:
+        "200": { description: Valid profile source }
+        "4XX": { $ref: "#/components/responses/ClientError" }
+  /inboxes/{inbox_id}/sieve/{script_id}/activate:
+    parameters:
+      - $ref: "#/components/parameters/InboxId"
+      - { name: script_id, in: path, required: true, schema: { type: string } }
+    post:
+      summary: Explicitly activate a stored Sieve revision
+      operationId: activateSieve
+      responses:
+        "200": { description: Activated revision, content: { application/json: { schema: { $ref: "#/components/schemas/SieveScriptResponse" } } } }
+        "4XX": { $ref: "#/components/responses/ClientError" }
+  /inboxes/{inbox_id}/sieve/{script_id}/test:
+    parameters:
+      - $ref: "#/components/parameters/InboxId"
+      - { name: script_id, in: path, required: true, schema: { type: string } }
+    post:
+      summary: Dry-run a stored Sieve revision against a ready inbound message
+      operationId: testSieve
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message_id]
+              properties:
+                message_id: { type: string }
+      responses:
+        "200": { description: Proposed vacation action or no action }
+        "4XX": { $ref: "#/components/responses/ClientError" }
   /messages:
     get:
       summary: Poll the unified message feed
@@ -239,6 +317,19 @@ components:
         disposition: { type: string }
         size: { type: integer }
         checksum_sha256: { type: string }
+    SieveScript:
+      type: object
+      required: [id, inbox_id, name, revision, source, source_sha256, active, created_at, updated_at]
+      properties:
+        id: { type: string }
+        inbox_id: { type: string }
+        name: { type: string }
+        revision: { type: integer, minimum: 1 }
+        source: { type: string, maxLength: 65536 }
+        source_sha256: { type: string, pattern: "^[a-f0-9]{64}$" }
+        active: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
     Message:
       type: object
       required: [id, inbox, direction, text, body_truncated, attachments, state, parse_status, untrusted_content]
@@ -263,6 +354,8 @@ components:
         untrusted_content: { const: true }
     InboxResponse: { type: object, properties: { data: { $ref: "#/components/schemas/Inbox" } } }
     InboxList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Inbox" } } } }
+    SieveScriptResponse: { type: object, properties: { data: { $ref: "#/components/schemas/SieveScript" } } }
+    SieveScriptList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/SieveScript" } } } }
     MessageResponse: { type: object, properties: { data: { $ref: "#/components/schemas/Message" } } }
     MessageList:
       type: object

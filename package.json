@@ -12,8 +12,8 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "npm --workspace @agentpostoffice/client run build && npm --workspace @agentpostoffice/cli run build && npm --workspace @agentpostoffice/mcp run build && npm --workspace @agentpostoffice/worker run build",
-    "check": "npm --workspace @agentpostoffice/client run build && npm run check --workspaces --if-present && tsc --noEmit -p tsconfig.tools.json && npm run openapi:lint",
+    "build": "npm --workspace @agentpostoffice/sieve run build && npm --workspace @agentpostoffice/client run build && npm --workspace @agentpostoffice/cli run build && npm --workspace @agentpostoffice/mcp run build && npm --workspace @agentpostoffice/worker run build",
+    "check": "npm --workspace @agentpostoffice/sieve run build && npm --workspace @agentpostoffice/client run build && npm run check --workspaces --if-present && tsc --noEmit -p tsconfig.tools.json && npm run openapi:lint",
     "clean": "npm run clean --workspaces --if-present",
     "test": "npm run test:unit && npm run test:worker",
     "test:unit": "vitest run --config vitest.config.ts",

@@ -13,9 +13,11 @@
 
 3. Give your favorite coding agent this prompt:
 
-   > Install Agent Post Office from `https://github.com/Agent-Post-Office/agentpostoffice-cloudflare` for `<your-domain>`. Create mailboxes `<your-mailboxes>`. Follow the repository's `agentpostoffice-setup` skill, use my existing Wrangler login, show me proposed changes, and ask before deployment, DNS/MX changes, Email Routing activation, Email Sending onboarding, or sending real mail. Do not ask me to paste API tokens into chat.
+   > Install Agent Post Office from `https://github.com/Agent-Post-Office/agentpostoffice-cloudflare` for `<your-domain>`. Create mailboxes `<your-mailboxes>`. Follow the repository's `agentpostoffice-setup` skill, use my existing Wrangler login, show me proposed changes, and ask before deployment, DNS/MX changes, Email Routing activation, or Email Sending onboarding. After the setup and live delivery checks pass, you are authorized to send exactly one non-sensitive installation-verification email from an active mailbox to `itworks@agentpostoffice.com`. Report the result without copying addresses or message content into evidence. This check may be counted once as an approximate verified installation; it does not subscribe me to future email. Ask before sending any other real mail. Do not ask me to paste API tokens into chat.
 
 That is the normal installation path. The rest of this README explains what the agent does and provides a manual fallback.
+
+The final verification message proves that the new installation can send to an arbitrary external recipient. Repeated messages from the same sender do not represent additional installations. The public count is approximate and must be described as **verified installations**, not total users or guaranteed active deployments.
 
 ### How it works
 
@@ -45,6 +47,7 @@ The Phase 1 implementation is test-covered, and a live deployment has proved the
 - Scoped SHA-256 bearer-token authentication with constant-time digest comparison.
 - Inbox CRUD; domain-wide keyset polling; message get/acknowledge/raw/attachment/delete; explicit-ID bulk deletion.
 - Transactional send and reply with required idempotency keys and `accepted`, `failed`, or `unknown` outcomes.
+- Automatic plain-text replies for new inbound messages through an opt-in, bounded Sieve profile and separate Automation Queue.
 - A shared client, local CLI, MCP server, versioned D1 migration, OpenAPI contract, and repo-local setup skill.
 
 All email bodies, subjects, headers, links, and attachments are untrusted. The service does not render HTML, open downloads, scan malware, promise exactly-once processing, or claim delivery after Cloudflare accepts a send.
@@ -94,6 +97,34 @@ The test suite has two gates:
 - Node unit tests for boundary normalization, bearer handling, the client, and SMTP persistence failure ordering.
 - Cloudflare workerd integration tests with real local D1 and R2 bindings for migrations, keyset pagination, tombstones, download headers, MIME parsing, attachment storage, queue redelivery, and idempotency replay.
 
+## Sieve autoresponders
+
+Automatic replies can run inside your Worker even when no agent process is connected. Agent Post Office supports a deliberately bounded Sieve autoresponder profile: one active script per mailbox, evaluated only for new inbound messages through a separate Automation Queue.
+
+This example replies to messages sent to `support@example.com`, then suppresses another automatic reply to the same sender for seven days:
+
+```sieve
+require ["envelope", "vacation"];
+
+if envelope :is "to" "support@example.com" {
+  vacation :days 7 :subject "We received your message"
+    "Thanks for writing. An agent will review your message.";
+  stop;
+}
+```
+
+The profile can match envelope and selected header metadata and send static plain-text `vacation` replies. It cannot inspect message bodies, redirect, delete, reject, attach files, select arbitrary recipients, or run code. Standard safety checks suppress replies to mailing lists, bulk mail, automated messages, daemon senders, and the mailbox itself.
+
+Store and activation are separate operations:
+
+```bash
+node packages/cli/dist/index.js sieve validate --inbox <inbox-id> --file examples/sieve/installation-welcome.sieve
+node packages/cli/dist/index.js sieve put --inbox <inbox-id> --name "Installation welcome" --file examples/sieve/installation-welcome.sieve
+node packages/cli/dist/index.js sieve activate <script-id> --inbox <inbox-id>
+```
+
+No script is installed or activated by default. The included installation-welcome script is an inactive example; only the central `itworks@agentpostoffice.com` mailbox uses it.
+
 TDD is mandatory for new behavior; see [AGENTS.md](./AGENTS.md).
 
 ## Configure Cloudflare application resources
@@ -114,6 +145,12 @@ npm run config:generate -- --mail-domain mail.example.com
 The helper authenticates Wrangler, inspects/reuses or creates D1, R2, Queue, and DLQ resources, writes the ignored `packages/worker/wrangler.jsonc`, and applies migrations. It does not silently activate MX or routing.
 
 See [Agent Post Office installation](./docs/INSTALL.md#choose-a-cloudflare-setup-path) for the dashboard walkthrough, agent prompt contract, Wrangler commands, permissions, and approval boundaries.
+
+## Upgrade existing deployments
+
+Merging a release does not deploy any self-hosted Worker. Each operator or local agent upgrades its own instances with their existing Cloudflare bindings. Multiple instances use separate ignored named Wrangler configs plus an ignored non-secret deployment registry, and are upgraded serially with a stop-on-failure gate between instances.
+
+See [the multi-instance upgrade runbook](./docs/UPGRADING.md) for inventory setup, named config generation, migration compatibility rules, dry runs, deployment, smoke checks, and Worker rollback.
 
 ## Agent-assisted Cloudflare setup
 
@@ -179,6 +216,35 @@ Before enabling routing, show:
 Cloudflare refuses managed routing activation while a non-Cloudflare apex MX exists. Remove only the explicitly approved conflicting MX, enable routing immediately, and restore the previous MX if activation fails. Verify both Cloudflare state and public DNS afterward.
 
 Wrangler 4.110.0 has an important limitation: it rejects `worker` actions for catch-all rules in local argument validation even though Cloudflare's Email Routing API accepts them. Configure the catch-all Worker action through the dashboard or supported API; do not substitute a `drop` or forwarding rule.
+
+#### Keep one address in Google Workspace
+
+One human-operated address can stay in Google Workspace while Agent Post Office handles every other address on the domain. Cloudflare must remain the only MX provider for the public domain:
+
+```text
+person@example.com  -> exact Cloudflare rule -> Google Workspace
+everything else     -> catch-all Worker rule -> Agent Post Office
+```
+
+The Google destination must be a different, independently deliverable address. **Do not forward the public address to itself.** Forwarding `person@example.com` to `person@example.com` resolves through the same Cloudflare MX records and can loop instead of reaching Google.
+
+For a Workspace account whose public user is `person@example.com`, Google documents an automatically assigned test-domain alias in the form `user@domain.test-google-a.com`, which becomes `person@example.com.test-google-a.com` in this example. Google documents this mechanism for coexistence and dual-delivery migrations. A mailbox on another Google-routed Workspace domain is also valid. Confirm that the chosen destination is supported for ongoing use by your Workspace configuration before cutover.
+
+1. Create or retain the Google Workspace user for the one human address.
+2. In **Email Routing > Destination Addresses**, add the distinct Google-deliverable address and complete Cloudflare's verification email.
+3. Create an exact routing rule for `person@example.com` that forwards to that verified destination.
+4. Keep the domain catch-all action pointing to the Agent Post Office Worker. Do not add Google MX records at the public apex.
+5. In Gmail, send as the public `person@example.com` address. Configure Google's DKIM TXT record, normally at `google._domainkey`, alongside Cloudflare's separate DKIM selectors.
+6. Publish exactly one SPF record at the public domain authorizing both systems:
+
+   ```text
+   v=spf1 include:_spf.mx.cloudflare.net include:_spf.google.com ~all
+   ```
+
+   Do not publish a second SPF record. Keep a single DMARC policy for the domain and verify that both a Google-sent message and an Agent Post Office message pass aligned DKIM or SPF.
+7. Test all three routes from an external sender: the Google address reaches Workspace, an active APO address reaches the Worker, and an unknown address is rejected.
+
+References: [Cloudflare routing rules and verified destinations](https://developers.cloudflare.com/email-service/configuration/email-routing-addresses/), [Cloudflare hybrid SPF and DKIM guidance](https://developers.cloudflare.com/email-service/configuration/domains/), [Google Workspace test-domain aliases](https://support.google.com/a/answer/9228551), and [Google Workspace DKIM setup](https://support.google.com/a/answer/174124).
 
 ### Outbound Email Sending onboarding
 

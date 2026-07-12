@@ -1,5 +1,5 @@
 import { env } from "cloudflare:test";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { parseMessage } from "../src/queue.js";
 import type { Env } from "../src/types.js";
 
@@ -7,6 +7,9 @@ const workerEnv = env as unknown as Env;
 
 beforeEach(async () => {
   await env.DB.batch([
+    env.DB.prepare("DELETE FROM sieve_vacation_responses"),
+    env.DB.prepare("DELETE FROM sieve_runs"),
+    env.DB.prepare("DELETE FROM sieve_scripts"),
     env.DB.prepare("DELETE FROM attachments"),
     env.DB.prepare("DELETE FROM messages"),
     env.DB.prepare("DELETE FROM inboxes"),
@@ -61,5 +64,30 @@ describe("Queue parsing", () => {
     expect(attachment.results).toHaveLength(1);
     expect(attachment.results[0]?.r2_key).not.toContain("test.txt");
     expect(await (await env.MAIL_BUCKET.get(attachment.results[0]!.r2_key))?.text()).toBe("attachment");
+  });
+
+  it("snapshots the active Sieve revision into the separate automation queue before ready", async () => {
+    await env.DB.prepare(
+      `INSERT INTO sieve_scripts
+       (id, inbox_id, name, revision, source, compiled_ir_json, source_sha256, active, created_at, updated_at)
+       VALUES ('siv_active', 'inb_parse', 'Active', 3, 'require ["vacation"];', '{}', ?, 1, ?, ?)`,
+    ).bind("b".repeat(64), "2026-07-10T00:00:00.000Z", "2026-07-10T00:00:00.000Z").run();
+    const rawKey = "messages/inb_parse/msg_automation/raw.eml";
+    await env.MAIL_BUCKET.put(rawKey, "From: person@example.net\r\nTo: parse@mail.example.com\r\nSubject: Test\r\n\r\nBody");
+    await env.DB.prepare(
+      `INSERT INTO messages
+       (id, inbox_id, direction, envelope_from, envelope_to, subject, raw_r2_key, parse_status, agent_state, labels_json, headers_json, received_at, created_at, updated_at)
+       VALUES ('msg_automation', 'inb_parse', 'inbound', 'person@example.net', 'parse@mail.example.com', 'Test', ?, 'pending', 'unprocessed', '[]', '{}', ?, ?, ?)`,
+    ).bind(rawKey, "2026-07-10T00:00:00.000Z", "2026-07-10T00:00:00.000Z", "2026-07-10T00:00:00.000Z").run();
+    const send = vi.fn(async () => undefined);
+    await parseMessage(
+      { kind: "parse", messageId: "msg_automation", rawR2Key: rawKey },
+      { ...workerEnv, AUTOMATION_QUEUE: { send } as unknown as Env["AUTOMATION_QUEUE"] },
+    );
+    expect(send).toHaveBeenCalledWith(
+      { kind: "automate", messageId: "msg_automation", scriptId: "siv_active", scriptRevision: 3 },
+      { contentType: "json" },
+    );
+    expect(await env.DB.prepare("SELECT parse_status FROM messages WHERE id = 'msg_automation'").first()).toEqual({ parse_status: "ready" });
   });
 });
