@@ -217,6 +217,35 @@ Cloudflare refuses managed routing activation while a non-Cloudflare apex MX exi
 
 Wrangler 4.110.0 has an important limitation: it rejects `worker` actions for catch-all rules in local argument validation even though Cloudflare's Email Routing API accepts them. Configure the catch-all Worker action through the dashboard or supported API; do not substitute a `drop` or forwarding rule.
 
+#### Keep one address in Google Workspace
+
+One human-operated address can stay in Google Workspace while Agent Post Office handles every other address on the domain. Cloudflare must remain the only MX provider for the public domain:
+
+```text
+person@example.com  -> exact Cloudflare rule -> Google Workspace
+everything else     -> catch-all Worker rule -> Agent Post Office
+```
+
+The Google destination must be a different, independently deliverable address. **Do not forward the public address to itself.** Forwarding `person@example.com` to `person@example.com` resolves through the same Cloudflare MX records and can loop instead of reaching Google.
+
+For a Workspace account whose public user is `person@example.com`, Google documents an automatically assigned test-domain alias in the form `user@domain.test-google-a.com`, which becomes `person@example.com.test-google-a.com` in this example. Google documents this mechanism for coexistence and dual-delivery migrations. A mailbox on another Google-routed Workspace domain is also valid. Confirm that the chosen destination is supported for ongoing use by your Workspace configuration before cutover.
+
+1. Create or retain the Google Workspace user for the one human address.
+2. In **Email Routing > Destination Addresses**, add the distinct Google-deliverable address and complete Cloudflare's verification email.
+3. Create an exact routing rule for `person@example.com` that forwards to that verified destination.
+4. Keep the domain catch-all action pointing to the Agent Post Office Worker. Do not add Google MX records at the public apex.
+5. In Gmail, send as the public `person@example.com` address. Configure Google's DKIM TXT record, normally at `google._domainkey`, alongside Cloudflare's separate DKIM selectors.
+6. Publish exactly one SPF record at the public domain authorizing both systems:
+
+   ```text
+   v=spf1 include:_spf.mx.cloudflare.net include:_spf.google.com ~all
+   ```
+
+   Do not publish a second SPF record. Keep a single DMARC policy for the domain and verify that both a Google-sent message and an Agent Post Office message pass aligned DKIM or SPF.
+7. Test all three routes from an external sender: the Google address reaches Workspace, an active APO address reaches the Worker, and an unknown address is rejected.
+
+References: [Cloudflare routing rules and verified destinations](https://developers.cloudflare.com/email-service/configuration/email-routing-addresses/), [Cloudflare hybrid SPF and DKIM guidance](https://developers.cloudflare.com/email-service/configuration/domains/), [Google Workspace test-domain aliases](https://support.google.com/a/answer/9228551), and [Google Workspace DKIM setup](https://support.google.com/a/answer/174124).
+
 ### Outbound Email Sending onboarding
 
 Email Routing does not enable arbitrary-recipient sending. Until Email Sending is onboarded, Cloudflare may return `E_RECIPIENT_NOT_ALLOWED` for replies to unverified destinations.
