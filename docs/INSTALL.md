@@ -170,6 +170,22 @@ Create every address that must survive a provider/MX migration. Unknown and disa
 
 ## 7. Activate Cloudflare Email Service
 
+### Custom-domain migration checklist
+
+Changing authoritative nameservers moves DNS hosting; it does not automatically migrate mail delivery. Imported records can retain the previous provider's MX and SPF authorization. For example, Namecheap forwarding MX hosts such as `eforward1.registrar-servers.com` and an SPF `include:spf.efwd.registrar-servers.com` can remain after a nameserver change. If obsolete MX still directs replies to that provider, it may permanently reject them with `554 5.7.1 Relay access denied`, while APO outbound mail succeeds with passing authentication.
+
+Before an approved cutover:
+
+1. Inventory and export existing DNS for rollback. Identify every current mailbox, forwarding address, alias, application sender, and other mail consumer on the selected domain. Confirm which must remain with the existing provider; use a dedicated mail subdomain if necessary.
+2. Confirm the exact `MAIL_DOMAIN` in the deployed configuration and the intended Worker/account. The current architecture serves one custom mail domain per deployment. A custom HTTP hostname or working website/SSL does not configure the mail domain. Create and confirm every intended APO inbox is active before routing mail.
+3. Review the DNS records generated for that exact domain by Cloudflare's dashboard or supported API, including MX priorities, SPF, and DKIM. Do not copy fixed values from another installation. Separately review Email Sending's bounce-domain and authentication records.
+4. With operator approval, replace only obsolete provider MX and SPF authorization during the mail cutover. Preserve unrelated website records and verification TXT, plus needed DKIM selectors and existing DMARC policy/reporting. If other senders still need SPF, reconcile their authorization with Cloudflare's requirements into one SPF TXT record per hostname; never add a second root `v=spf1` record. Do not remove a provider's records merely because DNS hosting changed.
+5. Activate Email Routing and verify the enabled catch-all uses **Send to a Worker** with the intended deployment. Inspect any exact-recipient rules too: a matching rule can bypass the catch-all. Confirm public authoritative MX matches Cloudflare's generated inbound records, and check again through a public resolver after propagation. Keep the export available for rollback if activation fails.
+
+Follow Cloudflare's current [routing setup](https://developers.cloudflare.com/email-service/get-started/route-emails/) for generated DNS and Worker rules. APO's [inbound handler](../packages/worker/src/inbound.ts) checks the envelope domain and active D1 inbox: the catch-all does not create inboxes or accept unknown/disabled recipients.
+
+APO inboxes are application records accessed through REST, CLI, or MCP, not conventional IMAP mailboxes or a webmail login. Creating an inbox via the CLI/API does not create Cloudflare DNS or Email Routing rules.
+
 ### Path A - manual dashboard
 
 #### Email Sending
@@ -234,7 +250,23 @@ However, the current CLI cannot retrieve the exact generated Sending DKIM record
 
 Check Email Sending and Routing status, confirm public DNS, and send only operator-approved disposable test messages. A dedicated mail subdomain is safest when the apex already receives mail elsewhere; using the apex intentionally replaces its existing inbound provider.
 
-After activation, run every gate in [PHASE-0.md](./PHASE-0.md). Setup is incomplete until a real inbound message is visible through polling, explicitly acknowledged, and successfully replied to with correct threading.
+Before calling the addresses ready to use, verify all of the following with operator-approved non-sensitive messages:
+
+- Email Routing is active for the exact `MAIL_DOMAIN`, public MX is correct, and the effective recipient rule targets the intended Worker.
+- Send from an external address to an active APO inbox, then confirm the actual inbound message is visible through APO polling and can be acknowledged. Check routing activity and any sender bounce if it is missing.
+- Send/reply from APO to the external address and confirm actual receipt there, including spam folders and SPF/DKIM/DMARC authentication headers. An API `accepted` outcome only confirms send acceptance. Even delivered outbound mail with passing headers does not establish inbound readiness.
+- With approval, test an unknown or disabled recipient and confirm rejection as implemented; catch-all routing must not imply acceptance of every local part.
+
+If a sender received a permanent `550`/`554` bounce, ask them to resend **after** routing is fixed and a fresh inbound test succeeds. Do not promise automatic delivery of the bounced message; distinguish it from a temporary failure still queued by the sender. Cloudflare documents the distinction in its [email lifecycle](https://developers.cloudflare.com/email-service/concepts/email-lifecycle/).
+
+| Symptom | Check and next action |
+| --- | --- |
+| Website/SSL works, inboxes exist, or `/health` succeeds; inbound mail is missing | These check DNS/HTTP/application state, not SMTP receipt. Check MX, Routing activation, effective recipient rule, and actual APO receipt. |
+| Old-provider `550`/`554`, including `5.7.1 Relay access denied` | Inspect authoritative MX for stale imported provider records. Review the approved cutover; do not blindly delete all TXT. Prove inbound receipt after correction, then request resend. |
+| Cloudflare receives mail but APO has no message | Inspect routing activity, exact-recipient overrides, Worker target, `MAIL_DOMAIN`, active inbox, and Worker errors. |
+| Outbound request is `accepted`, but no external receipt | Check destination spam, bounce/delivery status, and authentication headers; acceptance is not delivery. |
+
+These are address usability checks, not completion of the full preview proof matrix. After activation, run every gate in [PHASE-0.md](./PHASE-0.md). Setup is incomplete until a real inbound message is visible through polling, explicitly acknowledged, and successfully replied to with correct threading.
 
 ## 8. Configure MCP
 
