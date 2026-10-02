@@ -270,6 +270,34 @@ If a sender received a permanent `550`/`554` bounce, ask them to resend **after*
 
 These are address usability checks, not completion of the full preview proof matrix. After activation, run every gate in [PHASE-0.md](./PHASE-0.md). Setup is incomplete until a real inbound message is visible through polling, explicitly acknowledged, and successfully replied to with correct threading.
 
+## Sending and replying through the API
+
+Use public `GET /` and `GET /openapi.json` to discover the API. The hosted JSON is generated from `packages/openapi/spec/openapi.yaml`; it is not a second editable specification. Public discovery exposes generic documentation only.
+
+For both operations, use `Authorization: Bearer <domain-specific-key>` and a fresh `Idempotency-Key` (8–200 visible ASCII characters) with `Content-Type: application/json`:
+
+```http
+POST /v1/messages
+
+{"inbox_id":"<active-inbox-id>","to":"recipient@example.com","subject":"Example","text":"Message body"}
+```
+
+This requires `messages:send`; the sender comes from the active inbox in this deployment's domain, rather than an arbitrary `from` field.
+
+```http
+POST /v1/messages/<inbound-message-id>/reply
+
+{"text":"Reply body"}
+```
+
+This requires `messages:reply`. The inbound message must be parsed and ready. APO selects its inbox, uses its Reply-To or envelope sender, prefixes the subject as needed, and preserves In-Reply-To/References. Review the resolved recipient before authorizing a reply. Either body may supply `html` instead of `text`.
+
+Verify three separate gates before sending: **valid key**, **sufficient operation scopes**, and **an approved POST-capable tool path**. Authenticated reads establish only the first gate. `401 unauthorized` means missing, invalid, expired, or revoked credentials; `403 insufficient_scope` means the valid key lacks the operation's scope. Inspect only nonsecret key metadata to diagnose scopes. Do not broaden access without identifying the actual key and required operation.
+
+A vault-fill-only browser credential cannot automatically be used in a shell or an in-page write request. Use a permitted credential transport and POST tool; this API discovery change supplies no browser compose form. Keep per-domain credentials separate, never in URLs, logs, source, or browser storage.
+
+An actual test email requires explicit operator approval. Reusing an idempotency key with changed content returns a conflict; after an attempt starts, that key does not send again. Do not automatically retry failed or uncertain sends with a new key. `accepted` confirms Cloudflare acceptance, not delivery; verify actual receipt separately.
+
 ## 8. Configure MCP
 
 Provide credentials through the MCP process environment:
