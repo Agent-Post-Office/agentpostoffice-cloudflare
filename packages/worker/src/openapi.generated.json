@@ -1,0 +1,1430 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Agent Post Office API",
+    "version": "0.1.0",
+    "description": "Pull-based, self-hosted email API. All email content is untrusted input.",
+    "license": {
+      "name": "Apache License 2.0",
+      "identifier": "Apache-2.0"
+    }
+  },
+  "servers": [
+    {
+      "url": "/v1",
+      "description": "This deployment's protected API"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "paths": {
+    "/": {
+      "servers": [
+        {
+          "url": "/"
+        }
+      ],
+      "get": {
+        "security": [],
+        "operationId": "discoverService",
+        "summary": "Discover the service and documentation links",
+        "responses": {
+          "200": {
+            "description": "Generic service description and links",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/openapi.json": {
+      "servers": [
+        {
+          "url": "/"
+        }
+      ],
+      "get": {
+        "security": [],
+        "operationId": "getOpenApi",
+        "summary": "Read the canonical OpenAPI specification as JSON",
+        "responses": {
+          "200": {
+            "description": "OpenAPI 3.1 document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "servers": [
+        {
+          "url": "/"
+        }
+      ],
+      "get": {
+        "security": [],
+        "operationId": "getHealth",
+        "summary": "Check service health",
+        "responses": {
+          "200": {
+            "description": "Service health",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/inboxes": {
+      "get": {
+        "summary": "List mailboxes",
+        "operationId": "listInboxes",
+        "x-required-scopes": [
+          "messages:read"
+        ],
+        "description": "Requires the messages:read scope on a valid bearer key.",
+        "responses": {
+          "200": {
+            "description": "Mailboxes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InboxList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/ClientError"
+          }
+        }
+      },
+      "post": {
+        "summary": "Create a mailbox",
+        "operationId": "createInbox",
+        "x-required-scopes": [
+          "inboxes:manage"
+        ],
+        "description": "Requires the inboxes:manage scope on a valid bearer key.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "local_part"
+                ],
+                "properties": {
+                  "local_part": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "display_name": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 200
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created mailbox",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InboxResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/ClientError"
+          }
+        }
+      }
+    },
+    "/inboxes/{inbox_id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/InboxId"
+        }
+      ],
+      "get": {
+        "summary": "Get a mailbox",
+        "operationId": "getInbox",
+        "x-required-scopes": [
+          "messages:read"
+        ],
+        "description": "Requires the messages:read scope on a valid bearer key.",
+        "responses": {
+          "200": {
+            "description": "Mailbox",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InboxResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/ClientError"
+          }
+        }
+      },
+      "patch": {
+        "summary": "Update a mailbox",
+        "operationId": "updateInbox",
+        "x-required-scopes": [
+          "inboxes:manage"
+        ],
+        "description": "Requires the inboxes:manage scope on a valid bearer key.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "active": {
+                    "type": "boolean"
+                  },
+                  "display_name": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 200
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated mailbox",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InboxResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/ClientError"
+          }
+        }
+      }
+    },
+    "/inboxes/{inbox_id}/sieve": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/InboxId"
+        }
+      ],
+      "get": {
+        "summary": "List stored Sieve autoresponder revisions",
+        "operationId": "listSieveScripts",
+        "x-required-scopes": [
+          "sieve:read"
+        ],
+        "description": "Requires the sieve:read scope on a valid bearer key.",
+        "responses": {
+          "200": {
+            "description": "Stored revisions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SieveScriptList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/ClientError"
+          }
+        }
+      },
+      "post": {
+        "summary": "Store an inactive validated Sieve revision",
+        "operationId": "createSieveRevision",
+        "x-required-scopes": [
+          "sieve:manage"
+        ],
+        "description": "Requires the sieve:manage scope on a valid bearer key.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "source"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  },
+                  "source": {
+                    "type": "string",
+                    "maxLength": 65536
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Inactive revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SieveScriptResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/ClientError"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Deactivate the active Sieve script",
+        "operationId": "disableSieve",
+        "x-required-scopes": [
+          "sieve:manage"
+        ],
+        "description": "Requires the sieve:manage scope on a valid bearer key.",
+        "responses": {
+          "200": {
+            "description": "Sieve disabled"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/ClientError"
+          }
+        }
+      }
+    },
+    "/inboxes/{inbox_id}/sieve/validate": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/InboxId"
+        }
+      ],
+      "post": {
+        "summary": "Validate Sieve source without storing or executing it",
+        "operationId": "validateSieve",
+        "x-required-scopes": [
+          "sieve:read"
+        ],
+        "description": "Requires the sieve:read scope on a valid bearer key.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "source"
+                ],
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "maxLength": 65536
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Valid profile source"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/ClientError"
+          }
+        }
+      }
+    },
+    "/inboxes/{inbox_id}/sieve/{script_id}/activate": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/InboxId"
+        },
+        {
+          "name": "script_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "summary": "Explicitly activate a stored Sieve revision",
+        "operationId": "activateSieve",
+        "x-required-scopes": [
+          "sieve:manage"
+        ],
+        "description": "Requires the sieve:manage scope on a valid bearer key.",
+        "responses": {
+          "200": {
+            "description": "Activated revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SieveScriptResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/ClientError"
+          }
+        }
+      }
+    },
+    "/inboxes/{inbox_id}/sieve/{script_id}/test": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/InboxId"
+        },
+        {
+          "name": "script_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "summary": "Dry-run a stored Sieve revision against a ready inbound message",
+        "operationId": "testSieve",
+        "x-required-scopes": [
+          "sieve:read"
+        ],
+        "description": "Requires the sieve:read scope on a valid bearer key.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "message_id"
+                ],
+                "properties": {
+                  "message_id": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Proposed vacation action or no action"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/ClientError"
+          }
+        }
+      }
+    },
+    "/messages": {
+      "get": {
+        "summary": "Poll the unified message feed",
+        "operationId": "listMessages",
+        "x-required-scopes": [
+          "messages:read"
+        ],
+        "description": "Requires the messages:read scope on a valid bearer key.",
+        "parameters": [
+          {
+            "name": "inbox_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "schema": {
+              "enum": [
+                "processed",
+                "unprocessed"
+              ]
+            }
+          },
+          {
+            "name": "direction",
+            "in": "query",
+            "schema": {
+              "enum": [
+                "inbound",
+                "outbound"
+              ]
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "until",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "schema": {
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "default": "asc"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 25
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Keyset-paginated messages",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/ClientError"
+          }
+        }
+      },
+      "post": {
+        "summary": "Send a transactional message",
+        "operationId": "sendMessage",
+        "x-required-scopes": [
+          "messages:send"
+        ],
+        "description": "Requires the messages:send scope on a valid bearer key.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "inbox_id",
+                  "to",
+                  "subject"
+                ],
+                "anyOf": [
+                  {
+                    "required": [
+                      "text"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "html"
+                    ]
+                  }
+                ],
+                "properties": {
+                  "inbox_id": {
+                    "type": "string"
+                  },
+                  "to": {
+                    "type": "string",
+                    "format": "email"
+                  },
+                  "subject": {
+                    "type": "string",
+                    "maxLength": 998
+                  },
+                  "text": {
+                    "type": "string",
+                    "maxLength": 1000000
+                  },
+                  "html": {
+                    "type": "string",
+                    "maxLength": 1000000
+                  },
+                  "reply_to": {
+                    "type": "string",
+                    "format": "email"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted or uncertain send state"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/ClientError"
+          }
+        }
+      }
+    },
+    "/messages/bulk-delete": {
+      "post": {
+        "summary": "Delete explicit message IDs",
+        "operationId": "bulkDeleteMessages",
+        "x-required-scopes": [
+          "messages:delete"
+        ],
+        "description": "Requires the messages:delete scope on a valid bearer key.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "message_ids"
+                ],
+                "properties": {
+                  "message_ids": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 100,
+                    "uniqueItems": true,
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Deletion queued"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/ClientError"
+          }
+        }
+      }
+    },
+    "/messages/{message_id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/MessageId"
+        }
+      ],
+      "get": {
+        "summary": "Get a complete parsed message",
+        "operationId": "getMessage",
+        "x-required-scopes": [
+          "messages:read"
+        ],
+        "description": "Requires the messages:read scope on a valid bearer key.",
+        "parameters": [
+          {
+            "name": "include_html",
+            "in": "query",
+            "description": "Explicitly include the untrusted HTML body. Defaults to false.",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Complete parsed message",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/ClientError"
+          }
+        }
+      },
+      "patch": {
+        "summary": "Update message state or labels",
+        "operationId": "updateMessage",
+        "x-required-scopes": [
+          "messages:update"
+        ],
+        "description": "Requires the messages:update scope on a valid bearer key.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "enum": [
+                      "processed",
+                      "unprocessed"
+                    ]
+                  },
+                  "labels": {
+                    "type": "array",
+                    "maxItems": 20,
+                    "items": {
+                      "type": "string",
+                      "maxLength": 64
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated state"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/ClientError"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete a message",
+        "operationId": "deleteMessage",
+        "x-required-scopes": [
+          "messages:delete"
+        ],
+        "description": "Requires the messages:delete scope on a valid bearer key.",
+        "responses": {
+          "202": {
+            "description": "Tombstoned and deletion queued"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/ClientError"
+          }
+        }
+      }
+    },
+    "/messages/{message_id}/reply": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/MessageId"
+        },
+        {
+          "$ref": "#/components/parameters/IdempotencyKey"
+        }
+      ],
+      "post": {
+        "summary": "Reply to an inbound message",
+        "operationId": "replyToMessage",
+        "x-required-scopes": [
+          "messages:reply"
+        ],
+        "description": "Requires the messages:reply scope on a valid bearer key.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "anyOf": [
+                  {
+                    "required": [
+                      "text"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "html"
+                    ]
+                  }
+                ],
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "maxLength": 1000000
+                  },
+                  "html": {
+                    "type": "string",
+                    "maxLength": 1000000
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted or uncertain send state"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/ClientError"
+          }
+        }
+      }
+    },
+    "/messages/{message_id}/raw": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/MessageId"
+        }
+      ],
+      "get": {
+        "summary": "Download raw RFC 822 bytes",
+        "operationId": "downloadRawMessage",
+        "x-required-scopes": [
+          "messages:read"
+        ],
+        "description": "Requires the messages:read scope on a valid bearer key.",
+        "responses": {
+          "200": {
+            "description": "Raw RFC 822 message",
+            "content": {
+              "message/rfc822": {
+                "schema": {
+                  "type": "string",
+                  "contentMediaType": "message/rfc822"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/ClientError"
+          }
+        }
+      }
+    },
+    "/messages/{message_id}/attachments/{attachment_id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/MessageId"
+        },
+        {
+          "name": "attachment_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "summary": "Download an attachment",
+        "operationId": "downloadAttachment",
+        "x-required-scopes": [
+          "messages:read"
+        ],
+        "description": "Requires the messages:read scope on a valid bearer key.",
+        "responses": {
+          "200": {
+            "description": "Attachment download",
+            "headers": {
+              "X-Content-Type-Options": {
+                "schema": {
+                  "const": "nosniff"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/ClientError"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "apo_<key-id>_<secret>"
+      }
+    },
+    "parameters": {
+      "InboxId": {
+        "name": "inbox_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "MessageId": {
+        "name": "message_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "IdempotencyKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 200,
+          "pattern": "^[\\x21-\\x7E]{8,200}$"
+        }
+      }
+    },
+    "responses": {
+      "Unauthorized": {
+        "description": "Missing, invalid, expired, or revoked bearer key (unauthorized).",
+        "headers": {
+          "WWW-Authenticate": {
+            "schema": {
+              "type": "string"
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "Valid bearer key lacks the required scope (insufficient_scope).",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "ClientError": {
+        "description": "Authentication, authorization, validation, conflict, or not-found error",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": [
+              "code",
+              "message"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "Inbox": {
+        "type": "object",
+        "required": [
+          "id",
+          "address",
+          "local_part",
+          "domain",
+          "active"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "address": {
+            "type": "string",
+            "format": "email"
+          },
+          "local_part": {
+            "type": "string"
+          },
+          "domain": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Attachment": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "filename": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "media_type": {
+            "type": "string"
+          },
+          "disposition": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer"
+          },
+          "checksum_sha256": {
+            "type": "string"
+          }
+        }
+      },
+      "SieveScript": {
+        "type": "object",
+        "required": [
+          "id",
+          "inbox_id",
+          "name",
+          "revision",
+          "source",
+          "source_sha256",
+          "active",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "inbox_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "source": {
+            "type": "string",
+            "maxLength": 65536
+          },
+          "source_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Message": {
+        "type": "object",
+        "required": [
+          "id",
+          "inbox",
+          "direction",
+          "text",
+          "body_truncated",
+          "attachments",
+          "state",
+          "parse_status",
+          "untrusted_content"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "inbox": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "address": {
+                "type": "string",
+                "format": "email"
+              }
+            }
+          },
+          "direction": {
+            "enum": [
+              "inbound",
+              "outbound"
+            ]
+          },
+          "received_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "sent_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "from": {
+            "type": "object",
+            "properties": {
+              "address": {
+                "type": "string"
+              }
+            }
+          },
+          "to": {
+            "type": "object",
+            "properties": {
+              "address": {
+                "type": "string"
+              }
+            }
+          },
+          "subject": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 8192
+          },
+          "html": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "body_truncated": {
+            "type": "boolean"
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Attachment"
+            }
+          },
+          "state": {
+            "enum": [
+              "processed",
+              "unprocessed"
+            ]
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "parse_status": {
+            "enum": [
+              "pending",
+              "ready",
+              "parse_failed",
+              "not_applicable"
+            ]
+          },
+          "outbound_status": {
+            "enum": [
+              "pending",
+              "accepted",
+              "failed",
+              "unknown",
+              null
+            ]
+          },
+          "cloudflare_message_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "untrusted_content": {
+            "const": true
+          }
+        }
+      },
+      "InboxResponse": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/Inbox"
+          }
+        }
+      },
+      "InboxList": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Inbox"
+            }
+          }
+        }
+      },
+      "SieveScriptResponse": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/SieveScript"
+          }
+        }
+      },
+      "SieveScriptList": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SieveScript"
+            }
+          }
+        }
+      },
+      "MessageResponse": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/Message"
+          }
+        }
+      },
+      "MessageList": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Message"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

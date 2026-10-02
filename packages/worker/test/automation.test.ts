@@ -1,5 +1,6 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { handleQueue } from "../src/queue.js";
 import { executeAutomationTask } from "../src/automation.js";
 import type { Env } from "../src/types.js";
 
@@ -42,7 +43,11 @@ describe("Sieve automation queue", () => {
     const workerEnv = { ...(env as unknown as Env), EMAIL: { send } };
 
     const task = { kind: "automate" as const, messageId: "msg_install", scriptId: "siv_welcome", scriptRevision: 1 };
-    await executeAutomationTask(task, workerEnv);
+    const ack = vi.fn();
+    const retry = vi.fn();
+    await handleQueue({ queue: "automation-test", messages: [{ id: "task_auto", body: task, ack, retry }] } as unknown as MessageBatch<typeof task>, workerEnv);
+    expect(ack).toHaveBeenCalledOnce();
+    expect(retry).not.toHaveBeenCalled();
     await executeAutomationTask(task, workerEnv);
 
     expect(send).toHaveBeenCalledTimes(1);

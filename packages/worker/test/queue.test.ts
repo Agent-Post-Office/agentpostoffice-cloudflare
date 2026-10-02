@@ -1,7 +1,7 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { parseMessage } from "../src/queue.js";
-import type { Env } from "../src/types.js";
+import { handleQueue, parseMessage } from "../src/queue.js";
+import type { Env, QueueTask } from "../src/types.js";
 
 const workerEnv = env as unknown as Env;
 
@@ -89,5 +89,44 @@ describe("Queue parsing", () => {
       { contentType: "json" },
     );
     expect(await env.DB.prepare("SELECT parse_status FROM messages WHERE id = 'msg_automation'").first()).toEqual({ parse_status: "ready" });
+  });
+});
+
+
+describe("Queue task dispatch", () => {
+  async function seedDispatchMessage() {
+    const key = "dispatch/raw.eml";
+    await env.MAIL_BUCKET.put(key, "Preserve this object");
+    await env.DB.prepare(`INSERT INTO messages
+      (id, inbox_id, direction, envelope_from, envelope_to, raw_r2_key, parse_status, agent_state, labels_json, headers_json, received_at, created_at, updated_at)
+      VALUES ('msg_dispatch','inb_parse','inbound','person@example.net','parse@mail.example.com',?,'ready','unprocessed','[]','{}',?,?,?)`)
+      .bind(key, "2026-07-10T00:00:00Z", "2026-07-10T00:00:00Z", "2026-07-10T00:00:00Z").run();
+    return key;
+  }
+
+  function batch(body: unknown) {
+    const ack = vi.fn();
+    const retry = vi.fn();
+    return { ack, retry, value: { queue: "mail-test", messages: [{ id: "task_dispatch", body, ack, retry }] } as unknown as MessageBatch<QueueTask> };
+  }
+
+  it("retries unknown task kinds without deleting mail or acknowledging them", async () => {
+    const key = await seedDispatchMessage();
+    const queued = batch({ kind: "unexpected", messageId: "msg_dispatch" });
+    await handleQueue(queued.value, workerEnv);
+    expect(queued.retry).toHaveBeenCalledOnce();
+    expect(queued.ack).not.toHaveBeenCalled();
+    expect(await env.DB.prepare("SELECT id FROM messages WHERE id = 'msg_dispatch'").first()).not.toBeNull();
+    expect(await env.MAIL_BUCKET.get(key)).not.toBeNull();
+  });
+
+  it("retains explicit deletion dispatch", async () => {
+    const key = await seedDispatchMessage();
+    const queued = batch({ kind: "delete", messageId: "msg_dispatch" });
+    await handleQueue(queued.value, workerEnv);
+    expect(queued.ack).toHaveBeenCalledOnce();
+    expect(queued.retry).not.toHaveBeenCalled();
+    expect(await env.DB.prepare("SELECT id FROM messages WHERE id = 'msg_dispatch'").first()).toBeNull();
+    expect(await env.MAIL_BUCKET.get(key)).toBeNull();
   });
 });

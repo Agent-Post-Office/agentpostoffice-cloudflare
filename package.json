@@ -12,8 +12,8 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "npm --workspace @agentpostoffice/sieve run build && npm --workspace @agentpostoffice/client run build && npm --workspace @agentpostoffice/cli run build && npm --workspace @agentpostoffice/mcp run build && npm --workspace @agentpostoffice/worker run build",
-    "check": "npm --workspace @agentpostoffice/sieve run build && npm --workspace @agentpostoffice/client run build && npm run check --workspaces --if-present && tsc --noEmit -p tsconfig.tools.json && npm run openapi:lint",
+    "build": "npm run openapi:check && npm --workspace @agentpostoffice/sieve run build && npm --workspace @agentpostoffice/client run build && npm --workspace @agentpostoffice/cli run build && npm --workspace @agentpostoffice/mcp run build && npm --workspace @agentpostoffice/worker run build",
+    "check": "npm --workspace @agentpostoffice/sieve run build && npm --workspace @agentpostoffice/client run build && npm run check --workspaces --if-present && tsc --noEmit -p tsconfig.tools.json && npm run openapi:lint && npm run openapi:check",
     "clean": "npm run clean --workspaces --if-present",
     "test": "npm run test:unit && npm run test:worker",
     "test:unit": "vitest run --config vitest.config.ts",
@@ -22,7 +22,9 @@
     "openapi:lint": "redocly lint packages/openapi/spec/openapi.yaml",
     "dev": "npm --workspace @agentpostoffice/worker run dev",
     "deploy": "npm --workspace @agentpostoffice/worker run deploy",
-    "config:generate": "tsx tools/configure.ts"
+    "config:generate": "tsx tools/configure.ts",
+    "openapi:generate": "node tools/generate-openapi.mjs",
+    "openapi:check": "node tools/generate-openapi.mjs --check"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "0.18.4",
@@ -31,7 +33,8 @@
     "tsx": "4.23.0",
     "typescript": "7.0.2",
     "vitest": "4.1.11",
-    "wrangler": "4.110.0"
+    "wrangler": "4.110.0",
+    "yaml": "2.9.1"
   },
   "overrides": {
     "@hono/node-server": "1.19.17",

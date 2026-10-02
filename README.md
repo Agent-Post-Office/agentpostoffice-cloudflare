@@ -15,6 +15,8 @@
 
    > Install Agent Post Office from `https://github.com/Agent-Post-Office/agentpostoffice-cloudflare` for `<your-domain>`. Create mailboxes `<your-mailboxes>`. Follow the repository's `agentpostoffice-setup` skill, use my existing Wrangler login, show me proposed changes, and ask before deployment, DNS/MX changes, Email Routing activation, or Email Sending onboarding. After the setup and live delivery checks pass, you are authorized to send exactly one non-sensitive installation-verification email from an active mailbox to `itworks@agentpostoffice.com`. Report the result without copying addresses or message content into evidence. This check may be counted once as an approximate verified installation; it does not subscribe me to future email. Ask before sending any other real mail. Do not ask me to paste API tokens into chat.
 
+**Mail readiness:** Moving nameservers to Cloudflare does not migrate mail delivery. Imported MX can still route mail to the previous provider, and SPF can retain obsolete authorization even while the website works and outbound mail passes SPF/DKIM/DMARC. A healthy Worker and active APO inboxes do not prove incoming mail works. Follow the [custom-domain migration checklist](./docs/INSTALL-REFERENCE.md#custom-domain-migration-checklist) and verify receipt in both directions before asking others to use the addresses.
+
 That is the normal installation path. The rest of this README explains what the agent does and provides a manual fallback.
 
 The final verification message proves that the new installation can send to an arbitrary external recipient. Repeated messages from the same sender do not represent additional installations. The public count is approximate and must be described as **verified installations**, not total users or guaranteed active deployments.
@@ -83,6 +85,8 @@ Budget alerts are informational: they do not pause, cap, or stop usage. When an 
 
 ## Development
 
+After editing the canonical OpenAPI YAML, run `npm run openapi:generate`. The bundled `packages/worker/src/openapi.generated.json` is generated output; do not edit it directly. `npm run openapi:check` and CI verify exact source/artifact agreement and route/scope consistency.
+
 Requirements: Node.js 20+ and npm.
 
 ```bash
@@ -144,7 +148,7 @@ npm run config:generate -- --mail-domain mail.example.com
 
 The helper authenticates Wrangler, inspects/reuses or creates D1, R2, Queue, and DLQ resources, writes the ignored `packages/worker/wrangler.jsonc`, and applies migrations. It does not silently activate MX or routing.
 
-See [Agent Post Office installation](./docs/INSTALL.md#choose-a-cloudflare-setup-path) for the dashboard walkthrough, agent prompt contract, Wrangler commands, permissions, and approval boundaries.
+See [Agent Post Office installation](./docs/INSTALL-REFERENCE.md#choose-a-cloudflare-setup-path) for the dashboard walkthrough, agent prompt contract, Wrangler commands, permissions, and approval boundaries.
 
 ## Upgrade existing deployments
 
@@ -189,7 +193,7 @@ npm run deploy
 npm --workspace @agentpostoffice/worker run migrate:remote
 ```
 
-There is no token-management npm script or application API. Follow the agent-operated Wrangler procedure in [docs/INSTALL.md](./docs/INSTALL.md#5-deploy-migrate-and-create-an-application-token): generate the credential locally without printing it, insert only its digest and metadata into D1 with Wrangler, and pipe the raw value through `--token-stdin` directly into the operating-system credential store.
+There is no token-management npm script or application API. Follow the agent-operated Wrangler procedure in [docs/INSTALL.md](./docs/INSTALL-REFERENCE.md#5-deploy-migrate-and-create-an-application-token): generate the credential locally without printing it, insert only its digest and metadata into D1 with Wrangler, and pipe the raw value through `--token-stdin` directly into the operating-system credential store.
 
 Create every intended mailbox before routing mail:
 
@@ -205,10 +209,10 @@ Do not invent these local parts for an operator. Unknown and disabled recipients
 
 Using an apex domain replaces its current inbound provider for every address on that domain. A dedicated mail subdomain is safer when an existing provider must remain active.
 
-Before enabling routing, show:
+First follow the [migration checklist](./docs/INSTALL-REFERENCE.md#custom-domain-migration-checklist), including existing mail consumers and DNS backup. Before enabling routing, show:
 
 - the current public MX records;
-- the three Cloudflare routing MX records;
+- the current Cloudflare-generated routing MX records and priorities;
 - Cloudflare's managed routing SPF and DKIM records;
 - the enabled catch-all Worker action targeting `agentpostoffice`;
 - every existing MX record that will be removed.
@@ -291,11 +295,29 @@ Never reuse an idempotency key after a failed or uncertain attempt. `accepted` m
 | Cloudflare activity says the Worker threw a temporary exception | Inspect Workers Observability. Do not convert infrastructure failures into permanent `setReject()` policy failures. |
 | `custom header 'Message-ID' is not allowed` | Deploy the fixed reply builder and let Cloudflare generate `Message-ID`. |
 | `E_RECIPIENT_NOT_ALLOWED` | Email Sending is not onboarded for arbitrary-recipient delivery, or the account lacks the required entitlement. Review onboarding and plan eligibility. |
+| Replies bounce with `550`/`554` (for example, `5.7.1 Relay access denied`) at the old provider | Check authoritative MX and Email Routing status; imported provider records may still direct mail there. After fixing routing and proving receipt, ask the sender to resend permanently bounced mail. |
 | A test is absent after an MX cutover | The sender may cache the previous MX for its TTL. Check Cloudflare's routing activity before assuming DNS failed. |
 
-Create, list, scope, expire, and revoke application tokens through the agent-operated Wrangler D1 procedure in [docs/INSTALL.md](./docs/INSTALL.md#5-deploy-migrate-and-create-an-application-token). Agent Post Office application code only reads token rows. Raw tokens must never appear in command arguments, chat, logs, or evidence.
+Create, list, scope, expire, and revoke application tokens through the agent-operated Wrangler D1 procedure in [docs/INSTALL.md](./docs/INSTALL-REFERENCE.md#5-deploy-migrate-and-create-an-application-token). Agent Post Office application code only reads token rows. Raw tokens must never appear in command arguments, chat, logs, or evidence.
 
 ## Basic API use
+
+Public `GET /` links to documentation and `GET /openapi.json`, which serves JSON generated from the canonical [OpenAPI YAML](./packages/openapi/spec/openapi.yaml). Discovery requires no bearer and exposes no account or mailbox data. Protected operations remain under `/v1`.
+
+| Operation | Route | Required scope |
+| --- | --- | --- |
+| Send a new message | `POST /v1/messages` | `messages:send` |
+| Reply to an inbound message | `POST /v1/messages/{message_id}/reply` | `messages:reply` |
+
+Both requests require an `Authorization: Bearer <key>` header and an `Idempotency-Key` of 8–200 visible ASCII characters. Send uses `{ "inbox_id": "<active-inbox-id>", "to": "recipient@example.com", "subject": "Example", "text": "Message body" }`. Reply uses `{ "text": "Reply body" }`; the original inbound message selects the sender inbox, recipient, subject, and thread headers. Either operation may use `html` instead of `text`. The sender inbox must belong to the deployment's mail domain.
+
+Check three readiness gates separately:
+
+1. **Valid key:** an authenticated read succeeds; `401 unauthorized` means the key is missing, invalid, expired, or revoked.
+2. **Sufficient scopes:** inspect nonsecret key metadata for the operation's scope. A valid key lacking it receives `403 insufficient_scope`. Successful reads alone do not establish send permission.
+3. **Approved POST-capable tool path:** the tool must be permitted to submit authenticated POSTs and transport the domain's credential securely. A vault that only fills browser forms does not by itself provide a shell or write-fetch path. Discovery does not supply a compose UI or change tool permissions.
+
+Keep each domain's key with its matching deployment, outside URLs, logs, and source. An actual send/reply test requires explicit operator approval. `accepted` means Cloudflare accepted the request, not confirmed delivery.
 
 ```bash
 curl -sS https://agentpostoffice.example.workers.dev/v1/messages?state=unprocessed\&order=asc\&limit=25 \

@@ -16,8 +16,10 @@ export async function handleQueue(batch: MessageBatch<QueueTask>, env: Env): Pro
         await executeAutomationTask(queued.body, env);
       } else if (queued.body.kind === "parse") {
         await parseMessage(queued.body, env);
-      } else {
+      } else if (queued.body.kind === "delete") {
         await deleteMessageObjects(queued.body.messageId, env);
+      } else {
+        throw new Error("unsupported_queue_task");
       }
       queued.ack();
     } catch (error) {

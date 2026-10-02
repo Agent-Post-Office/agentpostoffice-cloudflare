@@ -1,3 +1,4 @@
+import openapi from "./openapi.generated.json" with { type: "json" };
 import { authenticate, requireScope } from "./auth.js";
 import { compileSieve, evaluateSieve, SieveValidationError } from "@agentpostoffice/sieve";
 import { errorResponse, HttpError, json, readJson, requireString } from "./http.js";
@@ -29,6 +30,17 @@ interface ParsedMessageDocument {
 export async function handleApi(request: Request, env: Env): Promise<Response> {
   try {
     const url = new URL(request.url);
+    if (request.method === "GET" && url.pathname === "/") {
+      return json({
+        service: "agentpostoffice",
+        description: "Self-hosted email API for transactional messages and threaded replies.",
+        links: {
+          openapi: "/openapi.json",
+          docs: "https://github.com/Agent-Post-Office/agentpostoffice-cloudflare#basic-api-use",
+        },
+      });
+    }
+    if (request.method === "GET" && url.pathname === "/openapi.json") return json(openapi);
     if (url.pathname === "/health" && request.method === "GET") {
       return json({ ok: true, service: "agentpostoffice" });
     }
