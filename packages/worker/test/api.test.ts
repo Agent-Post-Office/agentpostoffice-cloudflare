@@ -1,3 +1,4 @@
+import openapi from "../src/openapi.generated.json" with { type: "json" };
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import { handleApi } from "../src/api.js";
@@ -26,6 +27,60 @@ beforeEach(async () => {
 });
 
 describe("REST API contract", () => {
+  it("exposes only generic public discovery and the canonical JSON spec", async () => {
+    const response = await handleApi(new Request("https://worker.example/"), {} as Env);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      service: "agentpostoffice",
+      description: "Self-hosted email API for transactional messages and threaded replies.",
+      links: { openapi: "/openapi.json", docs: "https://github.com/Agent-Post-Office/agentpostoffice-cloudflare#basic-api-use" },
+    });
+    const specResponse = await handleApi(new Request("https://worker.example/openapi.json"), {} as Env);
+    expect(specResponse.status).toBe(200);
+    const spec = await specResponse.json() as { openapi: string; paths: Record<string, unknown> };
+    expect(spec).toEqual(openapi);
+    expect(spec.openapi).toBe("3.1.0");
+    expect(spec.paths).toHaveProperty("/messages");
+    expect(spec.paths).toHaveProperty("/messages/{message_id}/reply");
+    for (const path of ["/", "/openapi.json"]) {
+      expect((await handleApi(new Request(`https://worker.example${path}`, { method: "POST" }), {} as Env)).status).toBe(404);
+    }
+  });
+
+  it("keeps send and reply protected with distinct authentication and scope failures", async () => {
+    for (const path of ["/v1/messages", "/v1/messages/msg_missing/reply"]) {
+      const response = await handleApi(new Request(`https://worker.example${path}`, { method: "POST" }), workerEnv);
+      expect(response.status).toBe(401);
+    }
+    await env.DB.prepare("UPDATE api_keys SET scopes_json = ?").bind('["messages:read"]').run();
+    for (const path of ["/v1/messages", "/v1/messages/msg_missing/reply"]) {
+      const response = await api(path, { method: "POST", body: "{}" });
+      expect(response.status).toBe(403);
+      expect(await response.json()).toEqual({ error: { code: "insufficient_scope", message: "Token does not have the required scope" } });
+    }
+  });
+
+  it("protects every documented mail operation from absent credentials and scopes", async () => {
+    await env.DB.prepare("UPDATE api_keys SET scopes_json = '[]'").run();
+    for (const [path, item] of Object.entries(openapi.paths)) {
+      for (const [method, operation] of Object.entries(item)) {
+        if (!["get", "post", "patch", "delete"].includes(method) || !("x-required-scopes" in operation)) continue;
+        const route = `/v1${path.replace(/\{[^}]+\}/g, "placeholder")}`;
+        expect((await handleApi(new Request(`https://worker.example${route}`, { method: method.toUpperCase() }), workerEnv)).status, `${method} ${route}`).toBe(401);
+        expect((await api(route, { method: method.toUpperCase() })).status, `${method} ${route}`).toBe(403);
+      }
+    }
+  });
+
+  it("keeps invalid, expired and revoked keys unauthorized after public discovery", async () => {
+    for (const changes of ["expires_at = '2000-01-01T00:00:00Z'", "expires_at = NULL, revoked_at = '2020-01-01T00:00:00Z'"]) {
+      await env.DB.prepare(`UPDATE api_keys SET ${changes}`).run();
+      expect((await api("/v1/messages")).status).toBe(401);
+      expect((await handleApi(new Request("https://worker.example/openapi.json", { headers: { Authorization: `Bearer ${token}` } }), workerEnv)).status).toBe(200);
+    }
+    expect((await handleApi(new Request("https://worker.example/v1/messages", { headers: { Authorization: "Bearer invalid" } }), workerEnv)).status).toBe(401);
+  });
+
   it("rejects tokens in URLs and returns a constant-shaped bearer challenge", async () => {
     const response = await handleApi(new Request(`https://worker.example/v1/inboxes?token=${token}`), workerEnv);
     expect(response.status).toBe(401);

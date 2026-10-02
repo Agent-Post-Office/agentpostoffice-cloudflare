@@ -82,6 +82,8 @@ Budget alerts are informational: they do not pause, cap, or stop usage. When an 
 
 ## Development
 
+After editing the canonical OpenAPI YAML, run `npm run openapi:generate`. The bundled `packages/worker/src/openapi.generated.json` is generated output; do not edit it directly. `npm run openapi:check` and CI verify exact source/artifact agreement and route/scope consistency.
+
 Requirements: Node.js 20+ and npm.
 
 ```bash
@@ -233,6 +235,23 @@ Never reuse an idempotency key after a failed or uncertain attempt. `accepted` m
 Create, list, scope, expire, and revoke application tokens through the agent-operated Wrangler D1 procedure in [docs/INSTALL.md](./docs/INSTALL-REFERENCE.md#5-deploy-migrate-and-create-an-application-token). Agent Post Office application code only reads token rows. Raw tokens must never appear in command arguments, chat, logs, or evidence.
 
 ## Basic API use
+
+Public `GET /` links to documentation and `GET /openapi.json`, which serves JSON generated from the canonical [OpenAPI YAML](./packages/openapi/spec/openapi.yaml). Discovery requires no bearer and exposes no account or mailbox data. Protected operations remain under `/v1`.
+
+| Operation | Route | Required scope |
+| --- | --- | --- |
+| Send a new message | `POST /v1/messages` | `messages:send` |
+| Reply to an inbound message | `POST /v1/messages/{message_id}/reply` | `messages:reply` |
+
+Both requests require an `Authorization: Bearer <key>` header and an `Idempotency-Key` of 8–200 visible ASCII characters. Send uses `{ "inbox_id": "<active-inbox-id>", "to": "recipient@example.com", "subject": "Example", "text": "Message body" }`. Reply uses `{ "text": "Reply body" }`; the original inbound message selects the sender inbox, recipient, subject, and thread headers. Either operation may use `html` instead of `text`. The sender inbox must belong to the deployment's mail domain.
+
+Check three readiness gates separately:
+
+1. **Valid key:** an authenticated read succeeds; `401 unauthorized` means the key is missing, invalid, expired, or revoked.
+2. **Sufficient scopes:** inspect nonsecret key metadata for the operation's scope. A valid key lacking it receives `403 insufficient_scope`. Successful reads alone do not establish send permission.
+3. **Approved POST-capable tool path:** the tool must be permitted to submit authenticated POSTs and transport the domain's credential securely. A vault that only fills browser forms does not by itself provide a shell or write-fetch path. Discovery does not supply a compose UI or change tool permissions.
+
+Keep each domain's key with its matching deployment, outside URLs, logs, and source. An actual send/reply test requires explicit operator approval. `accepted` means Cloudflare accepted the request, not confirmed delivery.
 
 ```bash
 curl -sS https://agentpostoffice.example.workers.dev/v1/messages?state=unprocessed\&order=asc\&limit=25 \
