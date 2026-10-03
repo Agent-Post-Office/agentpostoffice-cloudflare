@@ -15,6 +15,18 @@ export interface Inbox {
   updated_at: string;
 }
 
+export interface SieveScript {
+  id: string;
+  inbox_id: string;
+  name: string;
+  revision: number;
+  source: string;
+  source_sha256: string;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Attachment {
   id: string;
   filename: string | null;
@@ -105,6 +117,43 @@ export class AgentPostOfficeClient {
     return (await this.request<{ data: Inbox }>(`/v1/inboxes/${encodeURIComponent(id)}`, {
       method: "PATCH",
       body: JSON.stringify(update),
+    })).data;
+  }
+
+  async listSieve(inboxId: string): Promise<SieveScript[]> {
+    return (await this.request<{ data: SieveScript[] }>(`/v1/inboxes/${encodeURIComponent(inboxId)}/sieve`)).data;
+  }
+
+  async validateSieve(inboxId: string, source: string): Promise<{ valid: true; profile: string }> {
+    return (await this.request<{ data: { valid: true; profile: string } }>(`/v1/inboxes/${encodeURIComponent(inboxId)}/sieve/validate`, {
+      method: "POST",
+      body: JSON.stringify({ source }),
+    })).data;
+  }
+
+  async createSieveRevision(inboxId: string, input: { name: string; source: string }): Promise<SieveScript> {
+    return (await this.request<{ data: SieveScript }>(`/v1/inboxes/${encodeURIComponent(inboxId)}/sieve`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    })).data;
+  }
+
+  async activateSieve(inboxId: string, scriptId: string): Promise<SieveScript> {
+    return (await this.request<{ data: SieveScript }>(`/v1/inboxes/${encodeURIComponent(inboxId)}/sieve/${encodeURIComponent(scriptId)}/activate`, {
+      method: "POST",
+    })).data;
+  }
+
+  async testSieve(inboxId: string, scriptId: string, messageId: string): Promise<{ plan: unknown | null }> {
+    return (await this.request<{ data: { plan: unknown | null } }>(`/v1/inboxes/${encodeURIComponent(inboxId)}/sieve/${encodeURIComponent(scriptId)}/test`, {
+      method: "POST",
+      body: JSON.stringify({ message_id: messageId }),
+    })).data;
+  }
+
+  async disableSieve(inboxId: string): Promise<{ active: false }> {
+    return (await this.request<{ data: { active: false } }>(`/v1/inboxes/${encodeURIComponent(inboxId)}/sieve`, {
+      method: "DELETE",
     })).data;
   }
 

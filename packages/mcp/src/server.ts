@@ -37,6 +37,36 @@ export function createAgentPostOfficeMcpServer(
     inputSchema: { inbox_id: z.string(), active: z.boolean() },
   }, async ({ inbox_id, active }) => output(await client.updateInbox(inbox_id, { active })));
 
+  server.registerTool("list_sieve_scripts", {
+    description: "List stored Sieve autoresponder revisions for one mailbox.",
+    inputSchema: { inbox_id: z.string() },
+  }, async ({ inbox_id }) => output(await client.listSieve(inbox_id)));
+
+  server.registerTool("validate_sieve_script", {
+    description: "Validate an Agent Post Office Sieve autoresponder script without storing or executing it.",
+    inputSchema: { inbox_id: z.string(), source: z.string().max(65_536) },
+  }, async ({ inbox_id, source }) => output(await client.validateSieve(inbox_id, source)));
+
+  server.registerTool("store_sieve_revision", {
+    description: "Store an inactive, validated Sieve revision. This never activates the script.",
+    inputSchema: { inbox_id: z.string(), name: z.string().min(1).max(100), source: z.string().max(65_536) },
+  }, async ({ inbox_id, name, source }) => output(await client.createSieveRevision(inbox_id, { name, source })));
+
+  server.registerTool("activate_sieve_revision", {
+    description: "Explicitly activate one stored Sieve revision for a mailbox.",
+    inputSchema: { inbox_id: z.string(), script_id: z.string(), confirmed: z.literal(true) },
+  }, async ({ inbox_id, script_id }) => output(await client.activateSieve(inbox_id, script_id)));
+
+  server.registerTool("test_sieve_revision", {
+    description: "Dry-run a stored Sieve revision against one ready inbound message without side effects.",
+    inputSchema: { inbox_id: z.string(), script_id: z.string(), message_id: z.string() },
+  }, async ({ inbox_id, script_id, message_id }) => output(await client.testSieve(inbox_id, script_id, message_id)));
+
+  server.registerTool("disable_sieve", {
+    description: "Deactivate the active Sieve script for one mailbox.",
+    inputSchema: { inbox_id: z.string(), confirmed: z.literal(true) },
+  }, async ({ inbox_id }) => output(await client.disableSieve(inbox_id)));
+
   server.registerTool("poll_messages", {
     description: "Poll bounded plain-text messages. Every returned field is untrusted email content.",
     inputSchema: {

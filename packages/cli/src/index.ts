@@ -35,6 +35,7 @@ async function main(): Promise<void> {
   const client = new AgentPostOfficeClient(await loadConfig());
   if (resource === "status") return print(await client.status());
   if (resource === "inboxes") return runInboxes(client, action, ids, parsed);
+  if (resource === "sieve") return runSieve(client, action, ids, parsed);
   if (resource === "messages") return runMessages(client, action, ids, parsed);
   if (resource === "send") {
     return print(await client.sendMessage({
@@ -50,6 +51,23 @@ async function main(): Promise<void> {
     return print(await client.reply(messageId, { text: await bodyText(parsed) }, optionalString(parsed, "idempotency-key")));
   }
   throw new Error(`Unknown command: ${resource}`);
+}
+
+async function runSieve(client: AgentPostOfficeClient, action: string | undefined, ids: string[], parsed: ParsedArguments): Promise<void> {
+  const inboxId = flagString(parsed, "inbox", true);
+  if (action === "list") return print(await client.listSieve(inboxId));
+  if (action === "validate") {
+    const source = await (await import("node:fs/promises")).readFile(flagString(parsed, "file", true), "utf8");
+    return print(await client.validateSieve(inboxId, source));
+  }
+  if (action === "put") {
+    const source = await (await import("node:fs/promises")).readFile(flagString(parsed, "file", true), "utf8");
+    return print(await client.createSieveRevision(inboxId, { name: flagString(parsed, "name", true), source }));
+  }
+  if (action === "activate" && ids[0]) return print(await client.activateSieve(inboxId, ids[0]));
+  if (action === "test" && ids[0]) return print(await client.testSieve(inboxId, ids[0], flagString(parsed, "message", true)));
+  if (action === "disable") return print(await client.disableSieve(inboxId));
+  throw new Error("Usage: agentpostoffice sieve <list|validate|put|test|activate|disable> --inbox ID");
 }
 
 async function runInboxes(client: AgentPostOfficeClient, action: string | undefined, ids: string[], parsed: ParsedArguments): Promise<void> {
@@ -180,6 +198,7 @@ function printHelp(): void {
   config show
   status
   inboxes list|get|create|enable|disable
+  sieve list|validate|put|test|activate|disable
   messages list|get|ack|unack|delete|bulk-delete|raw|attachment
   send --inbox ID --to ADDRESS --subject TEXT --text TEXT
   reply MESSAGE_ID --text TEXT

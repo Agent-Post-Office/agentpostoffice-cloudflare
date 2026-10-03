@@ -21,7 +21,7 @@ export function normalizeLocalPart(value: string): string {
   return localPart;
 }
 
-export function newId(prefix: "inb" | "msg" | "att"): string {
+export function newId(prefix: "inb" | "msg" | "att" | "siv" | "run"): string {
   const time = Date.now().toString(36).padStart(9, "0");
   const random = crypto.getRandomValues(new Uint8Array(12));
   const suffix = [...random].map((byte) => byte.toString(16).padStart(2, "0")).join("");

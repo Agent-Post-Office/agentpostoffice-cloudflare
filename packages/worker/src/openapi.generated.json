@@ -266,6 +266,265 @@
         }
       }
     },
+    "/inboxes/{inbox_id}/sieve": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/InboxId"
+        }
+      ],
+      "get": {
+        "summary": "List stored Sieve autoresponder revisions",
+        "operationId": "listSieveScripts",
+        "x-required-scopes": [
+          "sieve:read"
+        ],
+        "description": "Requires the sieve:read scope on a valid bearer key.",
+        "responses": {
+          "200": {
+            "description": "Stored revisions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SieveScriptList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/ClientError"
+          }
+        }
+      },
+      "post": {
+        "summary": "Store an inactive validated Sieve revision",
+        "operationId": "createSieveRevision",
+        "x-required-scopes": [
+          "sieve:manage"
+        ],
+        "description": "Requires the sieve:manage scope on a valid bearer key.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "source"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  },
+                  "source": {
+                    "type": "string",
+                    "maxLength": 65536
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Inactive revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SieveScriptResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/ClientError"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Deactivate the active Sieve script",
+        "operationId": "disableSieve",
+        "x-required-scopes": [
+          "sieve:manage"
+        ],
+        "description": "Requires the sieve:manage scope on a valid bearer key.",
+        "responses": {
+          "200": {
+            "description": "Sieve disabled"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/ClientError"
+          }
+        }
+      }
+    },
+    "/inboxes/{inbox_id}/sieve/validate": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/InboxId"
+        }
+      ],
+      "post": {
+        "summary": "Validate Sieve source without storing or executing it",
+        "operationId": "validateSieve",
+        "x-required-scopes": [
+          "sieve:read"
+        ],
+        "description": "Requires the sieve:read scope on a valid bearer key.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "source"
+                ],
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "maxLength": 65536
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Valid profile source"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/ClientError"
+          }
+        }
+      }
+    },
+    "/inboxes/{inbox_id}/sieve/{script_id}/activate": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/InboxId"
+        },
+        {
+          "name": "script_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "summary": "Explicitly activate a stored Sieve revision",
+        "operationId": "activateSieve",
+        "x-required-scopes": [
+          "sieve:manage"
+        ],
+        "description": "Requires the sieve:manage scope on a valid bearer key.",
+        "responses": {
+          "200": {
+            "description": "Activated revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SieveScriptResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/ClientError"
+          }
+        }
+      }
+    },
+    "/inboxes/{inbox_id}/sieve/{script_id}/test": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/InboxId"
+        },
+        {
+          "name": "script_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "summary": "Dry-run a stored Sieve revision against a ready inbound message",
+        "operationId": "testSieve",
+        "x-required-scopes": [
+          "sieve:read"
+        ],
+        "description": "Requires the sieve:read scope on a valid bearer key.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "message_id"
+                ],
+                "properties": {
+                  "message_id": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Proposed vacation action or no action"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/ClientError"
+          }
+        }
+      }
+    },
     "/messages": {
       "get": {
         "summary": "Poll the unified message feed",
@@ -928,6 +1187,54 @@
           }
         }
       },
+      "SieveScript": {
+        "type": "object",
+        "required": [
+          "id",
+          "inbox_id",
+          "name",
+          "revision",
+          "source",
+          "source_sha256",
+          "active",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "inbox_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "source": {
+            "type": "string",
+            "maxLength": 65536
+          },
+          "source_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
       "Message": {
         "type": "object",
         "required": [
@@ -1070,6 +1377,25 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/Inbox"
+            }
+          }
+        }
+      },
+      "SieveScriptResponse": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/SieveScript"
+          }
+        }
+      },
+      "SieveScriptList": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SieveScript"
             }
           }
         }

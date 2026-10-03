@@ -12,8 +12,8 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "npm run openapi:check && npm --workspace @agentpostoffice/client run build && npm --workspace @agentpostoffice/cli run build && npm --workspace @agentpostoffice/mcp run build && npm --workspace @agentpostoffice/worker run build",
-    "check": "npm --workspace @agentpostoffice/client run build && npm run check --workspaces --if-present && tsc --noEmit -p tsconfig.tools.json && npm run openapi:lint && npm run openapi:check",
+    "build": "npm run openapi:check && npm --workspace @agentpostoffice/sieve run build && npm --workspace @agentpostoffice/client run build && npm --workspace @agentpostoffice/cli run build && npm --workspace @agentpostoffice/mcp run build && npm --workspace @agentpostoffice/worker run build",
+    "check": "npm --workspace @agentpostoffice/sieve run build && npm --workspace @agentpostoffice/client run build && npm run check --workspaces --if-present && tsc --noEmit -p tsconfig.tools.json && npm run openapi:lint && npm run openapi:check",
     "clean": "npm run clean --workspaces --if-present",
     "test": "npm run test:unit && npm run test:worker",
     "test:unit": "vitest run --config vitest.config.ts",
@@ -32,8 +32,18 @@
     "@types/node": "^24.0.0",
     "tsx": "4.23.0",
     "typescript": "7.0.2",
-    "vitest": "4.1.10",
+    "vitest": "4.1.11",
     "wrangler": "4.110.0",
     "yaml": "2.9.1"
+  },
+  "overrides": {
+    "@hono/node-server": "1.19.17",
+    "fast-uri": "3.1.8",
+    "hono": "4.13.8",
+    "ip-address": "10.7.2",
+    "postcss": "8.5.28",
+    "qs": "6.16.0",
+    "sharp": "0.35.4",
+    "undici": "7.29.1"
   }
 }

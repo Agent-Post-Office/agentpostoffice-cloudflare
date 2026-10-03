@@ -61,11 +61,12 @@ describe("REST API contract", () => {
   });
 
   it("protects every documented mail operation from absent credentials and scopes", async () => {
+    await seedInbox();
     await env.DB.prepare("UPDATE api_keys SET scopes_json = '[]'").run();
     for (const [path, item] of Object.entries(openapi.paths)) {
       for (const [method, operation] of Object.entries(item)) {
         if (!["get", "post", "patch", "delete"].includes(method) || !("x-required-scopes" in operation)) continue;
-        const route = `/v1${path.replace(/\{[^}]+\}/g, "placeholder")}`;
+        const route = `/v1${path.replace("{inbox_id}", "inb_test").replace(/\{[^}]+\}/g, "placeholder")}`;
         expect((await handleApi(new Request(`https://worker.example${route}`, { method: method.toUpperCase() }), workerEnv)).status, `${method} ${route}`).toBe(401);
         expect((await api(route, { method: method.toUpperCase() })).status, `${method} ${route}`).toBe(403);
       }

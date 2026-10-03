@@ -5,6 +5,8 @@ export const ALL_SCOPES = [
   "messages:send",
   "messages:delete",
   "inboxes:manage",
+  "sieve:read",
+  "sieve:manage",
 ] as const;
 
 export type Scope = (typeof ALL_SCOPES)[number];
@@ -29,15 +31,18 @@ export interface Env {
   DB: D1Database;
   MAIL_BUCKET: R2Bucket;
   MAIL_QUEUE: Queue<QueueTask>;
+  AUTOMATION_QUEUE: Queue<QueueTask>;
   EMAIL: SendEmailBinding;
   MAIL_DOMAIN: string;
   MAX_INBOUND_BYTES?: string;
   BODY_EXCERPT_BYTES?: string;
   DLQ_NAME?: string;
+  AUTOMATION_DLQ_NAME?: string;
 }
 
 export type QueueTask =
   | { kind: "parse"; messageId: string; rawR2Key: string }
+  | { kind: "automate"; messageId: string; scriptId: string; scriptRevision: number }
   | { kind: "delete"; messageId: string };
 
 export interface AuthContext {

@@ -315,3 +315,7 @@ Provide credentials through the MCP process environment:
 ```
 
 Use a narrower token when the MCP client does not need mailbox management or deletion. The download directory defaults to `~/Downloads/agentpostoffice`. MCP save tools require explicit confirmation, accept only a filename (not an absolute or nested path), and refuse to overwrite an existing file or symlink.
+
+## Existing Sieve autoresponders
+
+The optional bounded Sieve profile uses `sieve:read` for listing, validation and dry runs, and `sieve:manage` for storing, activating and disabling revisions. It has a separate Automation Queue and DLQ. Installing or upgrading the runtime does not activate a script; activation requires explicit operator approval. See the [README workflow](../README.md#sieve-autoresponders) and [upgrade guide](./UPGRADING.md). Preserve any existing active revision when upgrading.
