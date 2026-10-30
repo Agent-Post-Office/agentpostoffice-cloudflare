@@ -1,5 +1,6 @@
 import { compileSieve, evaluateSieve } from "@agentpostoffice/sieve";
 import { sendAutomationReply } from "./outbound.js";
+import { appendReference, headerValueWithinLimit, threadingMessageId } from "./threading.js";
 import type { Env, InboxRow, MessageRow, QueueTask } from "./types.js";
 import { newId, normalizeAddress, nowIso } from "./util.js";
 
@@ -56,8 +57,9 @@ export async function executeAutomationTask(
      ON CONFLICT(inbox_id, handle, sender_address) DO UPDATE SET last_sent_at = excluded.last_sent_at`,
   ).bind(inbox.id, plan.handle, sender, now).run();
 
-  const originalMessageId = headers["message-id"];
-  const references = appendReference(headers.references, originalMessageId);
+  const originalMessageId = threadingMessageId(headers, message.cloudflare_message_id);
+  const references = headerValueWithinLimit(appendReference(headers.references, originalMessageId));
+  const inReplyTo = headerValueWithinLimit(originalMessageId);
   try {
     await sendAutomationReply({
       inbox,
@@ -67,9 +69,11 @@ export async function executeAutomationTask(
       headers: {
         "Auto-Submitted": "auto-replied",
         "X-Agent-Post-Office-Automation": `${script.id}/${script.revision}`,
-        ...(originalMessageId ? { "In-Reply-To": originalMessageId } : {}),
+        ...(inReplyTo ? { "In-Reply-To": inReplyTo } : {}),
         ...(references ? { References: references } : {}),
       },
+      parentMessageId: message.id,
+      threadId: message.thread_id || message.id,
     }, env);
     await env.DB.batch([
       env.DB.prepare("UPDATE sieve_runs SET state = 'sent', updated_at = ? WHERE message_id = ? AND script_id = ? AND script_revision = ?")
@@ -122,9 +126,4 @@ function safeHeaders(value: string): Record<string, string> {
 
 function defaultReplySubject(subject: string | null): string {
   return /^re:/i.test(subject || "") ? subject || "Re:" : `Re: ${subject || ""}`;
-}
-
-function appendReference(references: string | undefined, messageId: string | undefined): string | undefined {
-  if (!messageId) return references;
-  return `${references || ""} ${messageId}`.trim().split(/\s+/).slice(-100).join(" ").slice(-8_192);
 }

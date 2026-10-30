@@ -1,7 +1,10 @@
 import PostalMime from "postal-mime";
 import { executeAutomationTask } from "./automation.js";
+import { messageIdsFromHeader, resolveThreadLink, trimReferenceIds } from "./threading.js";
 import type { AttachmentRow, Env, MessageRow, QueueTask } from "./types.js";
 import { excerptUtf8, newId, nowIso, sha256Hex } from "./util.js";
+
+const STORED_REFERENCES_MAX_BYTES = 8_192;
 
 export async function handleQueue(batch: MessageBatch<QueueTask>, env: Env): Promise<void> {
   const isDlq = Boolean(env.DLQ_NAME && batch.queue === env.DLQ_NAME);
@@ -106,9 +109,27 @@ export async function parseMessage(task: Extract<QueueTask, { kind: "parse" }>, 
 
   const replyTo = parsed.replyTo?.[0]?.address || null;
   const headers = JSON.parse(row.headers_json) as Record<string, string>;
-  if (parsed.messageId) headers["message-id"] = parsed.messageId;
-  if (parsed.inReplyTo) headers["in-reply-to"] = parsed.inReplyTo;
-  if (parsed.references) headers.references = parsed.references.slice(0, 8_192);
+  if (parsed.messageId) headers["message-id"] = parsed.messageId.trim();
+  if (parsed.inReplyTo) headers["in-reply-to"] = parsed.inReplyTo.trim();
+  if (parsed.references) {
+    headers.references = trimReferenceIds(messageIdsFromHeader(parsed.references), STORED_REFERENCES_MAX_BYTES)
+      || parsed.references.slice(0, STORED_REFERENCES_MAX_BYTES);
+  }
+  const refineThread = Boolean(parsed.inReplyTo || parsed.references);
+  let link: { parentMessageId: string | null; threadId: string } | null = null;
+  if (refineThread) {
+    try {
+      link = await resolveThreadLink(env, row.inbox_id, {
+        "in-reply-to": parsed.inReplyTo || "",
+        references: parsed.references || "",
+      }, row.id);
+    } catch (error) {
+      // Parsing must finish even when the thread lookup cannot. The message
+      // becomes its own root instead of staying pending.
+      console.error("parse_thread_lookup_failed", row.id, error instanceof Error ? error.name : "unknown");
+      link = { parentMessageId: null, threadId: row.id };
+    }
+  }
 
   const activeScript = await env.DB.prepare(
     "SELECT id, revision FROM sieve_scripts WHERE inbox_id = ? AND active = 1",
@@ -124,7 +145,10 @@ export async function parseMessage(task: Extract<QueueTask, { kind: "parse" }>, 
 
   await env.DB.prepare(
     `UPDATE messages SET subject = ?, reply_to = ?, text_excerpt = ?, body_truncated = ?,
-      parsed_r2_key = ?, parse_status = 'ready', headers_json = ?, updated_at = ? WHERE id = ?`,
+      parsed_r2_key = ?, parse_status = 'ready', headers_json = ?,
+      parent_message_id = CASE WHEN ? = 1 THEN ? ELSE parent_message_id END,
+      thread_id = CASE WHEN ? = 1 THEN ? ELSE thread_id END,
+      updated_at = ? WHERE id = ?`,
   ).bind(
     parsed.subject || row.subject,
     replyTo,
@@ -132,6 +156,10 @@ export async function parseMessage(task: Extract<QueueTask, { kind: "parse" }>, 
     excerpt.truncated ? 1 : 0,
     parsedR2Key,
     JSON.stringify(headers),
+    refineThread ? 1 : 0,
+    link?.parentMessageId ?? null,
+    refineThread ? 1 : 0,
+    link?.threadId ?? null,
     nowIso(),
     row.id,
   ).run();

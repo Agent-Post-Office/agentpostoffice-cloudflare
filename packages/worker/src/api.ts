@@ -515,6 +515,8 @@ function serializeMessage(
     parse_status: row.parse_status,
     outbound_status: row.outbound_status,
     cloudflare_message_id: row.cloudflare_message_id,
+    parent_message_id: row.parent_message_id ?? null,
+    thread_id: row.thread_id ?? null,
     untrusted_content: true,
   };
 }

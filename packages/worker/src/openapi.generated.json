@@ -1357,6 +1357,18 @@
               "null"
             ]
           },
+          "parent_message_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "thread_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "untrusted_content": {
             "const": true
           }

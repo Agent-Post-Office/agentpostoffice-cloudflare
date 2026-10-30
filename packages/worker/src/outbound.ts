@@ -1,4 +1,10 @@
 import { HttpError, requireString } from "./http.js";
+import {
+  appendReference,
+  headerValueWithinLimit,
+  providerMessageId,
+  threadingMessageId,
+} from "./threading.js";
 import type { AuthContext, Env, InboxRow, MessageRow } from "./types.js";
 import { excerptUtf8, newId, normalizeAddress, normalizeDomain, nowIso, sha256Hex } from "./util.js";
 
@@ -54,8 +60,9 @@ export async function replyToMessage(
   if (!text && !html) throw new HttpError(400, "invalid_request", "text or html is required");
 
   const headers = safeHeaders(original.headers_json);
-  const originalMessageId = headers["message-id"];
-  const references = appendReference(headers.references, originalMessageId);
+  const originalMessageId = threadingMessageId(headers, original.cloudflare_message_id);
+  const references = headerValueWithinLimit(appendReference(headers.references, originalMessageId));
+  const inReplyTo = headerValueWithinLimit(originalMessageId);
   const subject = /^re:/i.test(original.subject || "") ? original.subject || "Re:" : `Re: ${original.subject || ""}`;
   return deliver(
     {
@@ -65,9 +72,11 @@ export async function replyToMessage(
       text,
       html,
       headers: {
-        ...(originalMessageId ? { "In-Reply-To": originalMessageId } : {}),
+        ...(inReplyTo ? { "In-Reply-To": inReplyTo } : {}),
         ...(references ? { References: references } : {}),
       },
+      parentMessageId: original.id,
+      threadId: original.thread_id || original.id,
     },
     `POST:/v1/messages/${originalId}/reply`,
     idempotencyKey,
@@ -85,6 +94,8 @@ async function deliver(
     html?: string;
     replyTo?: string;
     headers?: Record<string, string>;
+    parentMessageId?: string | null;
+    threadId?: string | null;
   },
   endpoint: string,
   idempotencyKey: string,
@@ -95,7 +106,8 @@ async function deliver(
     throw new HttpError(400, "invalid_idempotency_key", "Idempotency-Key must be 8-200 visible ASCII characters");
   }
   const messageId = newId("msg");
-  const outboundRfcMessageId = `<${messageId}@${normalizeDomain(env.MAIL_DOMAIN)}>`;
+  const parentMessageId = mail.parentMessageId ?? null;
+  const threadId = mail.threadId || messageId;
   const requestDocument = {
     inboxId: mail.inbox.id,
     to: mail.recipient,
@@ -133,7 +145,7 @@ async function deliver(
     to: [{ address: mail.recipient }],
     replyTo: mail.replyTo ? [{ address: mail.replyTo }] : [],
     subject: mail.subject,
-    messageId: outboundRfcMessageId,
+    messageId: null,
     inReplyTo: mail.headers?.["In-Reply-To"] || null,
     references: mail.headers?.References || null,
   }), {
@@ -143,8 +155,8 @@ async function deliver(
     `INSERT INTO messages (
       id, inbox_id, direction, envelope_from, envelope_to, subject, text_excerpt, parsed_r2_key,
       body_truncated, parse_status, agent_state, labels_json, headers_json,
-      outbound_status, received_at, created_at, updated_at
-    ) VALUES (?, ?, 'outbound', ?, ?, ?, ?, ?, ?, 'not_applicable', 'processed', '[]', ?, 'pending', ?, ?, ?)`,
+      outbound_status, parent_message_id, thread_id, received_at, created_at, updated_at
+    ) VALUES (?, ?, 'outbound', ?, ?, ?, ?, ?, ?, 'not_applicable', 'processed', '[]', ?, 'pending', ?, ?, ?, ?, ?)`,
   ).bind(
     messageId,
     mail.inbox.id,
@@ -154,7 +166,9 @@ async function deliver(
     excerpt.text,
     parsedR2Key,
     excerpt.truncated ? 1 : 0,
-    JSON.stringify({ "message-id": outboundRfcMessageId, ...(mail.headers || {}) }),
+    JSON.stringify({ ...(mail.headers || {}) }),
+    parentMessageId,
+    threadId,
     now,
     now,
     now,
@@ -170,14 +184,15 @@ async function deliver(
       ...(mail.replyTo ? { replyTo: mail.replyTo } : {}),
       headers: mail.headers || {},
     }, env);
-    const response = { id: messageId, status: "accepted", cloudflare_message_id: result.messageId };
+    const providerId = providerMessageId(result);
+    const response = { id: messageId, status: "accepted", cloudflare_message_id: providerId };
     try {
-      await persistOutboundState(messageId, auth.keyId, endpoint, idempotencyKey, "accepted", response, result.messageId, env);
+      await persistOutboundState(messageId, auth.keyId, endpoint, idempotencyKey, "accepted", response, providerId, parsedR2Key, env);
       return { status: 202, body: response };
     } catch {
       const unknown = { id: messageId, status: "unknown" };
       try {
-        await persistOutboundState(messageId, auth.keyId, endpoint, idempotencyKey, "unknown", unknown, null, env);
+        await persistOutboundState(messageId, auth.keyId, endpoint, idempotencyKey, "unknown", unknown, null, parsedR2Key, env);
       } catch {
         // The client still receives unknown and must not retry with a new key.
       }
@@ -185,7 +200,7 @@ async function deliver(
     }
   } catch (error) {
     const response = { id: messageId, status: "failed", error: safeEmailError(error) };
-    await persistOutboundState(messageId, auth.keyId, endpoint, idempotencyKey, "failed", response, null, env);
+    await persistOutboundState(messageId, auth.keyId, endpoint, idempotencyKey, "failed", response, null, parsedR2Key, env);
     return { status: 502, body: response };
   }
 }
@@ -204,10 +219,14 @@ export async function sendAutomationReply(
     subject: string;
     text: string;
     headers: Record<string, string>;
+    parentMessageId?: string | null;
+    threadId?: string | null;
   },
   env: Env,
-): Promise<{ messageId: string; providerMessageId: string }> {
+): Promise<{ messageId: string; providerMessageId: string | null }> {
   const messageId = newId("msg");
+  const parentMessageId = mail.parentMessageId ?? null;
+  const threadId = mail.threadId || messageId;
   const now = nowIso();
   const fromAddress = `${mail.inbox.local_part}@${mail.inbox.domain}`;
   const parsedR2Key = `messages/${mail.inbox.id}/${messageId}/parsed.json`;
@@ -227,11 +246,11 @@ export async function sendAutomationReply(
     `INSERT INTO messages (
       id, inbox_id, direction, envelope_from, envelope_to, subject, text_excerpt, parsed_r2_key,
       body_truncated, parse_status, agent_state, labels_json, headers_json,
-      outbound_status, received_at, created_at, updated_at
-    ) VALUES (?, ?, 'outbound', ?, ?, ?, ?, ?, ?, 'not_applicable', 'processed', '[]', ?, 'pending', ?, ?, ?)`,
+      outbound_status, parent_message_id, thread_id, received_at, created_at, updated_at
+    ) VALUES (?, ?, 'outbound', ?, ?, ?, ?, ?, ?, 'not_applicable', 'processed', '[]', ?, 'pending', ?, ?, ?, ?, ?)`,
   ).bind(
     messageId, mail.inbox.id, fromAddress, mail.recipient, mail.subject, excerpt.text, parsedR2Key,
-    excerpt.truncated ? 1 : 0, JSON.stringify(mail.headers), now, now, now,
+    excerpt.truncated ? 1 : 0, JSON.stringify(mail.headers), parentMessageId, threadId, now, now, now,
   ).run();
   try {
     const result = await sendEmail({
@@ -241,10 +260,14 @@ export async function sendAutomationReply(
       text: mail.text,
       headers: mail.headers,
     }, env);
+    const providerId = providerMessageId(result);
+    const headers = { ...mail.headers };
+    if (providerId) headers["message-id"] = providerId;
     await env.DB.prepare(
-      "UPDATE messages SET outbound_status = 'accepted', cloudflare_message_id = ?, sent_at = ?, updated_at = ? WHERE id = ?",
-    ).bind(result.messageId, nowIso(), nowIso(), messageId).run();
-    return { messageId, providerMessageId: result.messageId };
+      "UPDATE messages SET outbound_status = 'accepted', cloudflare_message_id = ?, headers_json = ?, sent_at = ?, updated_at = ? WHERE id = ?",
+    ).bind(providerId, JSON.stringify(headers), nowIso(), nowIso(), messageId).run();
+    await writeParsedMessageId(env, parsedR2Key, providerId);
+    return { messageId, providerMessageId: providerId };
   } catch (error) {
     await env.DB.prepare(
       "UPDATE messages SET outbound_status = 'failed', updated_at = ? WHERE id = ?",
@@ -261,17 +284,48 @@ async function persistOutboundState(
   state: "accepted" | "failed" | "unknown",
   response: unknown,
   cloudflareMessageId: string | null,
+  parsedR2Key: string,
   env: Env,
 ): Promise<void> {
   const now = nowIso();
+  const headersJson = state === "accepted"
+    ? await headersWithProviderMessageId(messageId, cloudflareMessageId, env)
+    : null;
   await env.DB.batch([
-    env.DB.prepare(
-      "UPDATE messages SET outbound_status = ?, cloudflare_message_id = ?, sent_at = ?, updated_at = ? WHERE id = ?",
-    ).bind(state, cloudflareMessageId, state === "accepted" ? now : null, now, messageId),
+    headersJson === null
+      ? env.DB.prepare(
+        "UPDATE messages SET outbound_status = ?, cloudflare_message_id = ?, sent_at = ?, updated_at = ? WHERE id = ?",
+      ).bind(state, cloudflareMessageId, null, now, messageId)
+      : env.DB.prepare(
+        "UPDATE messages SET outbound_status = ?, cloudflare_message_id = ?, headers_json = ?, sent_at = ?, updated_at = ? WHERE id = ?",
+      ).bind(state, cloudflareMessageId, headersJson, now, now, messageId),
     env.DB.prepare(
       "UPDATE idempotency_keys SET state = ?, response_json = ?, updated_at = ? WHERE api_key_id = ? AND endpoint = ? AND idempotency_key = ?",
     ).bind(state, JSON.stringify(response), now, keyId, endpoint, idempotencyKey),
   ]);
+  if (state === "accepted") await writeParsedMessageId(env, parsedR2Key, cloudflareMessageId);
+}
+
+async function headersWithProviderMessageId(messageId: string, providerId: string | null, env: Env): Promise<string> {
+  const row = await env.DB.prepare("SELECT headers_json FROM messages WHERE id = ?").bind(messageId).first<{ headers_json: string }>();
+  const headers = safeHeaders(row?.headers_json || "{}");
+  if (providerId) headers["message-id"] = providerId;
+  else delete headers["message-id"];
+  return JSON.stringify(headers);
+}
+
+async function writeParsedMessageId(env: Env, key: string, messageId: string | null): Promise<void> {
+  try {
+    const object = await env.MAIL_BUCKET.get(key);
+    if (!object) return;
+    const parsed = await object.json<Record<string, unknown>>();
+    parsed.messageId = messageId;
+    await env.MAIL_BUCKET.put(key, JSON.stringify(parsed), {
+      httpMetadata: { contentType: "application/json; charset=utf-8" },
+    });
+  } catch (error) {
+    console.error("outbound_message_id_persist_failed", error instanceof Error ? error.name : "unknown");
+  }
 }
 
 async function activeInbox(id: string, env: Env): Promise<InboxRow> {
@@ -306,12 +360,6 @@ function safeHeaders(value: string): Record<string, string> {
   } catch {
     return {};
   }
-}
-
-function appendReference(references: string | undefined, messageId: string | undefined): string | undefined {
-  if (!messageId) return references;
-  const values = `${references || ""} ${messageId}`.trim().split(/\s+/).slice(-100);
-  return values.join(" ").slice(-8_192);
 }
 
 function constantDigest(left: string, right: string): boolean {
