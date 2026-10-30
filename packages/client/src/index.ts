@@ -42,6 +42,8 @@ export interface Message {
   direction: "inbound" | "outbound";
   received_at: string;
   sent_at: string | null;
+  replied_at: string | null;
+  last_reply_message_id: string | null;
   from: { address: string };
   to: { address: string };
   subject: string | null;
@@ -64,6 +66,7 @@ export interface ListMessageOptions {
   inboxId?: string;
   state?: "processed" | "unprocessed";
   direction?: "inbound" | "outbound";
+  replied?: boolean;
   since?: string;
   until?: string;
   order?: "asc" | "desc";
@@ -164,6 +167,7 @@ export class AgentPostOfficeClient {
     if (options.inboxId) query.set("inbox_id", options.inboxId);
     if (options.state) query.set("state", options.state);
     if (options.direction) query.set("direction", options.direction);
+    if (options.replied !== undefined) query.set("replied", options.replied ? "true" : "false");
     if (options.since) query.set("since", options.since);
     if (options.until) query.set("until", options.until);
     if (options.order) query.set("order", options.order);

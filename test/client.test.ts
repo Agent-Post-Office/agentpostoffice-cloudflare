@@ -26,6 +26,23 @@ describe("AgentPostOfficeClient", () => {
     await client.listMessages({ cursor: "opaque", state: "unprocessed" });
   });
 
+  it("passes a replied filter independently of processed state", async () => {
+    const urls: string[] = [];
+    const fetchMock = vi.fn(async (url: string | URL | Request) => {
+      urls.push(String(url));
+      return Response.json({ data: [], next_cursor: null });
+    });
+    const client = new AgentPostOfficeClient({ baseUrl: "https://inbox.example", token: "secret", fetch: fetchMock as typeof fetch });
+    await client.listMessages({ replied: false, state: "unprocessed" });
+    await client.listMessages({ replied: true });
+    const unreplied = new URL(urls[0]!);
+    expect(unreplied.searchParams.get("replied")).toBe("false");
+    expect(unreplied.searchParams.get("state")).toBe("unprocessed");
+    const replied = new URL(urls[1]!);
+    expect(replied.searchParams.get("replied")).toBe("true");
+    expect(replied.searchParams.get("state")).toBeNull();
+  });
+
   it("requests HTML only when the caller opts in", async () => {
     const urls: string[] = [];
     const client = new AgentPostOfficeClient({

@@ -56,7 +56,10 @@ describe("Sieve automation queue", () => {
       subject: "It works",
       headers: { "Auto-Submitted": "auto-replied" },
     });
-    expect(await env.DB.prepare("SELECT agent_state FROM messages WHERE id = 'msg_install'").first()).toEqual({ agent_state: "processed" });
+    expect(await env.DB.prepare("SELECT agent_state, replied_at FROM messages WHERE id = 'msg_install'").first()).toEqual({
+      agent_state: "processed",
+      replied_at: null,
+    });
     expect(await env.DB.prepare("SELECT state FROM sieve_runs WHERE message_id = 'msg_install'").first()).toEqual({ state: "sent" });
     expect(await env.DB.prepare(
       "SELECT direction, outbound_status, envelope_to FROM messages WHERE direction = 'outbound'",

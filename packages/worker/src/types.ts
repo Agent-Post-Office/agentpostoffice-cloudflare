@@ -83,6 +83,8 @@ export interface MessageRow {
   thread_id: string | null;
   received_at: string;
   sent_at: string | null;
+  replied_at: string | null;
+  last_reply_message_id: string | null;
   tombstoned_at: string | null;
   created_at: string;
   updated_at: string;
