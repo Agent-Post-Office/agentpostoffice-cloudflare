@@ -562,6 +562,18 @@
             }
           },
           {
+            "name": "replied",
+            "in": "query",
+            "description": "Limit the feed to inbound messages with or without an accepted reply. Independent of processed state. Cannot be combined with direction=outbound.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          },
+          {
             "name": "since",
             "in": "query",
             "schema": {
@@ -1280,6 +1292,19 @@
               "null"
             ],
             "format": "date-time"
+          },
+          "replied_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "last_reply_message_id": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "from": {
             "type": "object",

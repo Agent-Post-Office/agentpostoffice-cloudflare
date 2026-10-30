@@ -311,6 +311,11 @@ async function listMessages(url: URL, env: Env): Promise<Response> {
   if (state && state !== "processed" && state !== "unprocessed") throw new HttpError(400, "invalid_filter", "state is invalid");
   const direction = url.searchParams.get("direction");
   if (direction && direction !== "inbound" && direction !== "outbound") throw new HttpError(400, "invalid_filter", "direction is invalid");
+  const replied = url.searchParams.get("replied");
+  if (replied !== null && replied !== "true" && replied !== "false") throw new HttpError(400, "invalid_filter", "replied is invalid");
+  if ((replied === "true" || replied === "false") && direction === "outbound") {
+    throw new HttpError(400, "invalid_filter", "replied cannot be combined with direction=outbound");
+  }
   const inboxId = url.searchParams.get("inbox_id");
   const since = validTimestamp(url.searchParams.get("since"), "since");
   const until = validTimestamp(url.searchParams.get("until"), "until");
@@ -321,6 +326,9 @@ async function listMessages(url: URL, env: Env): Promise<Response> {
   const bindings: unknown[] = [];
   if (state) { clauses.push("m.agent_state = ?"); bindings.push(state); }
   if (direction) { clauses.push("m.direction = ?"); bindings.push(direction); }
+  else if (replied === "true" || replied === "false") clauses.push("m.direction = 'inbound'");
+  if (replied === "true") clauses.push("m.replied_at IS NOT NULL");
+  if (replied === "false") clauses.push("m.replied_at IS NULL");
   if (inboxId) { clauses.push("m.inbox_id = ?"); bindings.push(inboxId); }
   if (since) { clauses.push("m.received_at >= ?"); bindings.push(since); }
   if (until) { clauses.push("m.received_at <= ?"); bindings.push(until); }
@@ -504,6 +512,8 @@ function serializeMessage(
     direction: row.direction,
     received_at: row.received_at,
     sent_at: row.sent_at,
+    replied_at: row.replied_at ?? null,
+    last_reply_message_id: row.last_reply_message_id ?? null,
     from: { address: row.envelope_from },
     to: { address: row.envelope_to },
     subject: row.subject,

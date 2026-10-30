@@ -89,6 +89,7 @@ async function runMessages(client: AgentPostOfficeClient, action: string | undef
       inboxId: optionalString(parsed, "inbox"),
       state: optionalEnum(parsed, "state", ["processed", "unprocessed"] as const),
       direction: optionalEnum(parsed, "direction", ["inbound", "outbound"] as const),
+      replied: optionalReplied(parsed),
       order: optionalEnum(parsed, "order", ["asc", "desc"] as const),
       limit: optionalNumber(parsed, "limit"),
       cursor: optionalString(parsed, "cursor"),
@@ -178,6 +179,11 @@ function optionalNumber(parsed: ParsedArguments, name: string): number | undefin
   const parsedValue = Number(value);
   if (!Number.isFinite(parsedValue)) throw new Error(`--${name} must be a number`);
   return parsedValue;
+}
+
+function optionalReplied(parsed: ParsedArguments): boolean | undefined {
+  const value = optionalEnum(parsed, "replied", ["true", "false"] as const);
+  return value === undefined ? undefined : value === "true";
 }
 
 function optionalEnum<T extends readonly string[]>(parsed: ParsedArguments, name: string, values: T): T[number] | undefined {

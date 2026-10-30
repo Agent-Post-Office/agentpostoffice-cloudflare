@@ -211,6 +211,10 @@ paths:
         - { name: inbox_id, in: query, schema: { type: string } }
         - { name: state, in: query, schema: { enum: [processed, unprocessed] } }
         - { name: direction, in: query, schema: { enum: [inbound, outbound] } }
+        - name: replied
+          in: query
+          description: Limit the feed to inbound messages with or without an accepted reply. Independent of processed state. Cannot be combined with direction=outbound.
+          schema: { type: string, enum: ["true", "false"] }
         - { name: since, in: query, schema: { type: string, format: date-time } }
         - { name: until, in: query, schema: { type: string, format: date-time } }
         - { name: order, in: query, schema: { enum: [asc, desc], default: asc } }
@@ -448,6 +452,8 @@ components:
         direction: { enum: [inbound, outbound] }
         received_at: { type: string, format: date-time }
         sent_at: { type: [string, "null"], format: date-time }
+        replied_at: { type: [string, "null"], format: date-time }
+        last_reply_message_id: { type: [string, "null"] }
         from: { type: object, properties: { address: { type: string } } }
         to: { type: object, properties: { address: { type: string } } }
         subject: { type: [string, "null"] }

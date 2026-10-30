@@ -187,7 +187,18 @@ async function deliver(
     const providerId = providerMessageId(result);
     const response = { id: messageId, status: "accepted", cloudflare_message_id: providerId };
     try {
-      await persistOutboundState(messageId, auth.keyId, endpoint, idempotencyKey, "accepted", response, providerId, parsedR2Key, env);
+      await persistOutboundState(
+        messageId,
+        auth.keyId,
+        endpoint,
+        idempotencyKey,
+        "accepted",
+        response,
+        providerId,
+        parsedR2Key,
+        env,
+        parentMessageId ? { originalMessageId: parentMessageId, inboxId: mail.inbox.id } : null,
+      );
       return { status: 202, body: response };
     } catch {
       const unknown = { id: messageId, status: "unknown" };
@@ -276,6 +287,25 @@ export async function sendAutomationReply(
   }
 }
 
+export function acceptedReplyMark(
+  env: Env,
+  input: { originalMessageId: string; inboxId: string; replyMessageId: string; repliedAt: string },
+): D1PreparedStatement {
+  return env.DB.prepare(
+    `UPDATE messages
+     SET replied_at = ?, last_reply_message_id = ?, updated_at = ?
+     WHERE id = ? AND inbox_id = ? AND direction = 'inbound' AND tombstoned_at IS NULL
+       AND (replied_at IS NULL OR replied_at < ?)`,
+  ).bind(
+    input.repliedAt,
+    input.replyMessageId,
+    input.repliedAt,
+    input.originalMessageId,
+    input.inboxId,
+    input.repliedAt,
+  );
+}
+
 async function persistOutboundState(
   messageId: string,
   keyId: string,
@@ -286,6 +316,7 @@ async function persistOutboundState(
   cloudflareMessageId: string | null,
   parsedR2Key: string,
   env: Env,
+  reply: { originalMessageId: string; inboxId: string } | null = null,
 ): Promise<void> {
   const now = nowIso();
   const headersJson = state === "accepted"
@@ -303,6 +334,19 @@ async function persistOutboundState(
       "UPDATE idempotency_keys SET state = ?, response_json = ?, updated_at = ? WHERE api_key_id = ? AND endpoint = ? AND idempotency_key = ?",
     ).bind(state, JSON.stringify(response), now, keyId, endpoint, idempotencyKey),
   ]);
+  if (state === "accepted" && reply) {
+    try {
+      await acceptedReplyMark(env, {
+        originalMessageId: reply.originalMessageId,
+        inboxId: reply.inboxId,
+        replyMessageId: messageId,
+        repliedAt: now,
+      }).run();
+    } catch (error) {
+      // Acceptance is already stored. A marker failure must not become unknown.
+      console.error("reply_marker_failed", error instanceof Error ? error.name : "unknown");
+    }
+  }
   if (state === "accepted") await writeParsedMessageId(env, parsedR2Key, cloudflareMessageId);
 }
 
