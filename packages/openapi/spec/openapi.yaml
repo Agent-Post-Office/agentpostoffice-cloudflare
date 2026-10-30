@@ -460,6 +460,8 @@ components:
         parse_status: { enum: [pending, ready, parse_failed, not_applicable] }
         outbound_status: { enum: [pending, accepted, failed, unknown, null] }
         cloudflare_message_id: { type: [string, "null"] }
+        parent_message_id: { type: [string, "null"] }
+        thread_id: { type: [string, "null"] }
         untrusted_content: { const: true }
     InboxResponse: { type: object, properties: { data: { $ref: "#/components/schemas/Inbox" } } }
     InboxList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Inbox" } } } }

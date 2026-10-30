@@ -101,6 +101,32 @@ describe("Sieve automation queue", () => {
     );
     expect(send).toHaveBeenCalledTimes(1);
   });
+
+  it("caps References at 2048 bytes and keeps the root plus the newest ids", async () => {
+    const ids = Array.from({ length: 120 }, (_, index) => `<m${String(index).padStart(4, "0")}-${"x".repeat(20)}@example.net>`);
+    const newest = "<install@example.net>";
+    await seedMessage("msg_long_refs", "person@example.net", {
+      "message-id": newest,
+      references: ids.join(" "),
+    });
+    const send = vi.fn(async () => ({ messageId: "<auto-provider@mail.example.com>" }));
+    await executeAutomationTask(
+      { kind: "automate", messageId: "msg_long_refs", scriptId: "siv_welcome", scriptRevision: 1 },
+      { ...(env as unknown as Env), EMAIL: { send } },
+    );
+
+    expect(send).toHaveBeenCalledOnce();
+    const headers = (send.mock.calls[0]?.[0] as { headers: Record<string, string> }).headers;
+    const tokens = headers.References.split(" ");
+    expect(new TextEncoder().encode(headers.References).byteLength).toBeLessThanOrEqual(2048);
+    expect(new TextEncoder().encode(ids.join(" ")).byteLength).toBeGreaterThan(2048);
+    expect(new TextEncoder().encode(ids.join(" ")).byteLength).toBeLessThan(8192);
+    expect(tokens[0]).toBe(ids[0]);
+    expect(tokens.at(-1)).toBe(newest);
+    expect(tokens).not.toContain(ids[1]);
+    expect(tokens.every((token) => token === newest || ids.includes(token))).toBe(true);
+    expect(headers["In-Reply-To"]).toBe(newest);
+  });
 });
 
 async function seedMessage(id: string, sender: string, headers: Record<string, string>, visibleFrom?: string): Promise<void> {

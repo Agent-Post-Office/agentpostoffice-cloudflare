@@ -1,5 +1,8 @@
+import { messageIdsFromHeader, resolveThreadLink, trimReferenceIds } from "./threading.js";
 import type { Env, InboxRow, QueueTask } from "./types.js";
 import { newId, normalizeAddress, normalizeDomain, nowIso } from "./util.js";
+
+const STORED_REFERENCES_MAX_BYTES = 8_192;
 
 export interface ForwardableEmailMessage {
   readonly from: string;
@@ -46,6 +49,11 @@ export async function handleInbound(message: ForwardableEmailMessage, env: Env):
   const sender = safeAddress(message.from);
   const subject = boundedHeader(message.headers.get("subject"), 998);
   const headers = selectedHeaders(message.headers);
+  const link = await resolveThreadLink(env, inbox.id, {
+    "message-id": message.headers.get("message-id") || "",
+    "in-reply-to": message.headers.get("in-reply-to") || "",
+    references: message.headers.get("references") || "",
+  }, messageId);
   const rawBytes = await new Response(message.raw).arrayBuffer();
   if (rawBytes.byteLength !== message.rawSize) {
     throw new Error("Inbound message size changed while reading the raw stream");
@@ -67,8 +75,8 @@ export async function handleInbound(message: ForwardableEmailMessage, env: Env):
       `INSERT INTO messages (
         id, inbox_id, direction, envelope_from, envelope_to, subject,
         raw_r2_key, parse_status, agent_state, labels_json, headers_json,
-        received_at, created_at, updated_at
-      ) VALUES (?, ?, 'inbound', ?, ?, ?, ?, 'pending', 'unprocessed', '[]', ?, ?, ?, ?)`,
+        parent_message_id, thread_id, received_at, created_at, updated_at
+      ) VALUES (?, ?, 'inbound', ?, ?, ?, ?, 'pending', 'unprocessed', '[]', ?, ?, ?, ?, ?, ?)`,
     ).bind(
       messageId,
       inbox.id,
@@ -77,6 +85,8 @@ export async function handleInbound(message: ForwardableEmailMessage, env: Env):
       subject,
       rawR2Key,
       JSON.stringify(headers),
+      link.parentMessageId,
+      link.threadId,
       now,
       now,
       now,
@@ -99,7 +109,13 @@ function selectedHeaders(headers: Headers): Record<string, string> {
     "list-id", "list-help", "list-subscribe", "list-unsubscribe", "list-post", "list-owner", "list-archive",
   ]) {
     const value = headers.get(name);
-    if (value) selected[name] = value.slice(0, 8_192);
+    if (!value) continue;
+    if (name === "references") {
+      const trimmed = trimReferenceIds(messageIdsFromHeader(value), STORED_REFERENCES_MAX_BYTES);
+      if (trimmed) selected[name] = trimmed;
+      continue;
+    }
+    selected[name] = value.slice(0, 8_192);
   }
   return selected;
 }

@@ -54,6 +54,8 @@ export interface Message {
   parse_status: "pending" | "ready" | "parse_failed" | "not_applicable";
   outbound_status: "pending" | "accepted" | "failed" | "unknown" | null;
   cloudflare_message_id: string | null;
+  parent_message_id: string | null;
+  thread_id: string | null;
   untrusted_content: true;
   parsed?: unknown;
 }

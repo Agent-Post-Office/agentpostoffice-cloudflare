@@ -12,7 +12,8 @@ export const ALL_SCOPES = [
 export type Scope = (typeof ALL_SCOPES)[number];
 
 export interface SendEmailResult {
-  messageId: string;
+  /** Provider Message-ID. Absent or blank when Email Sending does not return one. */
+  messageId?: string | null;
 }
 
 export interface SendEmailBinding {
@@ -78,6 +79,8 @@ export interface MessageRow {
   headers_json: string;
   outbound_status: "pending" | "accepted" | "failed" | "unknown" | null;
   cloudflare_message_id: string | null;
+  parent_message_id: string | null;
+  thread_id: string | null;
   received_at: string;
   sent_at: string | null;
   tombstoned_at: string | null;
