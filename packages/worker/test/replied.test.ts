@@ -197,6 +197,165 @@ describe("inbound replied marker", () => {
     expect(invalid.status).toBe(400);
     expect(await invalid.json()).toEqual({ error: { code: "invalid_filter", message: "replied is invalid" } });
   });
+
+  it("keeps the accepted send when the reply marker update throws", async () => {
+    await seedInbound("msg_marker_fail", "inb_reply");
+    const send = vi.fn(async () => ({ messageId: "<marker-fail-provider@mail.example.com>" }));
+    const response = await handleApi(
+      replyRequest("msg_marker_fail", "reply-marker-fail-key"),
+      markerFailureEnv(send),
+    );
+    expect(response.status).toBe(202);
+    expect(await response.json()).toEqual({
+      data: {
+        id: expect.any(String),
+        status: "accepted",
+        cloudflare_message_id: "<marker-fail-provider@mail.example.com>",
+      },
+    });
+    const outbound = await env.DB.prepare(
+      "SELECT outbound_status, cloudflare_message_id, parsed_r2_key FROM messages WHERE direction = 'outbound'",
+    ).first<{ outbound_status: string; cloudflare_message_id: string | null; parsed_r2_key: string }>();
+    expect(outbound?.outbound_status).toBe("accepted");
+    expect(outbound?.cloudflare_message_id).toBe("<marker-fail-provider@mail.example.com>");
+    const parsed = await (await env.MAIL_BUCKET.get(outbound!.parsed_r2_key))!.json<{ messageId: string | null }>();
+    expect(parsed.messageId).toBe("<marker-fail-provider@mail.example.com>");
+    expect(await marker("msg_marker_fail")).toMatchObject({ replied_at: null, last_reply_message_id: null });
+  });
+
+  it("does not mark a tombstoned original and still accepts the reply", async () => {
+    await seedInbound("msg_tombstone", "inb_reply");
+    const send = vi.fn(async () => {
+      await env.DB.prepare(
+        "UPDATE messages SET tombstoned_at = ?, updated_at = ? WHERE id = 'msg_tombstone'",
+      ).bind("2026-07-11T01:00:00.000Z", "2026-07-11T01:00:00.000Z").run();
+      return { messageId: "<tombstone-provider@mail.example.com>" };
+    });
+    const response = await handleApi(
+      replyRequest("msg_tombstone", "reply-tombstone-key"),
+      { ...workerEnv, EMAIL: { send } },
+    );
+    expect(response.status).toBe(202);
+    const body = await response.json() as { data: { id: string; status: string; cloudflare_message_id: string | null } };
+    expect(body.data).toMatchObject({
+      status: "accepted",
+      cloudflare_message_id: "<tombstone-provider@mail.example.com>",
+    });
+    const original = await env.DB.prepare(
+      "SELECT replied_at, last_reply_message_id, tombstoned_at FROM messages WHERE id = 'msg_tombstone'",
+    ).first<{ replied_at: string | null; last_reply_message_id: string | null; tombstoned_at: string | null }>();
+    expect(original).toEqual({
+      replied_at: null,
+      last_reply_message_id: null,
+      tombstoned_at: "2026-07-11T01:00:00.000Z",
+    });
+    const outbound = await env.DB.prepare(
+      "SELECT outbound_status, cloudflare_message_id FROM messages WHERE id = ?",
+    ).bind(body.data.id).first<{ outbound_status: string; cloudflare_message_id: string | null }>();
+    expect(outbound).toEqual({
+      outbound_status: "accepted",
+      cloudflare_message_id: "<tombstone-provider@mail.example.com>",
+    });
+    const marked = await acceptedReplyMark(workerEnv, {
+      originalMessageId: "msg_tombstone",
+      inboxId: "inb_reply",
+      replyMessageId: body.data.id,
+      repliedAt: "2026-07-11T02:00:00.000Z",
+    }).run();
+    expect(marked.meta.changes).toBe(0);
+    expect(await marker("msg_tombstone")).toMatchObject({ replied_at: null, last_reply_message_id: null });
+  });
+
+  it("does not move replied_at backward", async () => {
+    await seedInbound("msg_order", "inb_reply", {
+      repliedAt: "2026-07-11T05:00:00.000Z",
+      lastReplyMessageId: "msg_newer",
+    });
+    const older = await acceptedReplyMark(workerEnv, {
+      originalMessageId: "msg_order",
+      inboxId: "inb_reply",
+      replyMessageId: "msg_older",
+      repliedAt: "2026-07-11T04:00:00.000Z",
+    }).run();
+    expect(older.meta.changes).toBe(0);
+    const same = await acceptedReplyMark(workerEnv, {
+      originalMessageId: "msg_order",
+      inboxId: "inb_reply",
+      replyMessageId: "msg_same",
+      repliedAt: "2026-07-11T05:00:00.000Z",
+    }).run();
+    expect(same.meta.changes).toBe(0);
+    expect(await marker("msg_order")).toMatchObject({
+      replied_at: "2026-07-11T05:00:00.000Z",
+      last_reply_message_id: "msg_newer",
+    });
+  });
+
+  it("limits replied=false to inbound messages", async () => {
+    await seedInbound("msg_open", "inb_reply");
+    await seedOutbound("msg_sent", "inb_reply");
+    const response = await handleApi(readRequest("/v1/messages?replied=false&order=asc"), workerEnv);
+    expect(response.status).toBe(200);
+    const body = await response.json() as { data: Array<{ id: string; direction: string }> };
+    expect(body.data.map((message) => message.id)).toEqual(["msg_open"]);
+    expect(body.data.every((message) => message.direction === "inbound")).toBe(true);
+    const conflict = await handleApi(readRequest("/v1/messages?replied=false&direction=outbound"), workerEnv);
+    expect(conflict.status).toBe(400);
+    expect(await conflict.json()).toEqual({
+      error: { code: "invalid_filter", message: "replied cannot be combined with direction=outbound" },
+    });
+  });
+
+  it("combines replied with state and inbox", async () => {
+    await seedInbound("msg_here_open", "inb_reply");
+    await seedInbound("msg_here_answered", "inb_reply", {
+      agentState: "processed",
+      repliedAt: "2026-07-11T03:00:00.000Z",
+      lastReplyMessageId: "msg_prior",
+    });
+    await seedInbound("msg_there_open", "inb_other");
+    await seedOutbound("msg_here_sent", "inb_reply");
+
+    const openHere = await handleApi(
+      readRequest("/v1/messages?replied=false&state=unprocessed&inbox_id=inb_reply&order=asc"),
+      workerEnv,
+    );
+    expect(openHere.status).toBe(200);
+    const openBody = await openHere.json() as { data: Array<{ id: string; state: string; replied_at: string | null }> };
+    expect(openBody.data.map((message) => message.id)).toEqual(["msg_here_open"]);
+    expect(openBody.data[0]).toMatchObject({ state: "unprocessed", replied_at: null });
+
+    const answeredHere = await handleApi(
+      readRequest("/v1/messages?replied=true&state=processed&inbox_id=inb_reply"),
+      workerEnv,
+    );
+    const answeredBody = await answeredHere.json() as { data: Array<{ id: string; state: string; replied_at: string | null }> };
+    expect(answeredBody.data.map((message) => message.id)).toEqual(["msg_here_answered"]);
+    expect(answeredBody.data[0]).toMatchObject({
+      state: "processed",
+      replied_at: "2026-07-11T03:00:00.000Z",
+    });
+  });
+
+  it("does not touch the marker when an accepted reply is replayed", async () => {
+    await seedInbound("msg_replay", "inb_reply");
+    const send = vi.fn(async () => ({ messageId: "<replay-provider@mail.example.com>" }));
+    const executionEnv = { ...workerEnv, EMAIL: { send } };
+    const first = await handleApi(replyRequest("msg_replay", "reply-replay-key"), executionEnv);
+    expect(first.status).toBe(202);
+    const firstBody = await first.json() as { data: { id: string; status: string; cloudflare_message_id: string | null } };
+    const marked = await marker("msg_replay");
+    expect(marked.replied_at).toMatch(isoTimestamp);
+    expect(marked.last_reply_message_id).toBe(firstBody.data.id);
+    waitForLaterTimestamp(marked.replied_at!);
+
+    const replay = await handleApi(replyRequest("msg_replay", "reply-replay-key"), executionEnv);
+    expect(replay.status).toBe(202);
+    expect(await replay.json()).toEqual({ data: firstBody.data });
+    expect(send).toHaveBeenCalledOnce();
+    expect(await marker("msg_replay")).toEqual(marked);
+    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM messages WHERE direction = 'outbound'").first<{ count: number }>()).toEqual({ count: 1 });
+  });
 });
 
 function replyRequest(messageId: string, idempotencyKey: string): Request {
@@ -215,6 +374,34 @@ function readRequest(path: string): Request {
   return new Request(`https://worker.example${path}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
+}
+
+function markerFailureEnv(send: ReturnType<typeof vi.fn>): Env {
+  const database = env.DB;
+  return {
+    ...workerEnv,
+    EMAIL: { send },
+    DB: {
+      prepare(sql: string) {
+        const statement = database.prepare(sql);
+        if (sql.includes("SET replied_at")) {
+          return {
+            bind(...values: unknown[]) {
+              statement.bind(...values);
+              return {
+                async run(): Promise<never> {
+                  throw new Error("marker update failed");
+                },
+              };
+            },
+          };
+        }
+        return statement;
+      },
+      batch: (statements: D1PreparedStatement[]) => database.batch(statements),
+      exec: database.exec.bind(database),
+    },
+  } as Env;
 }
 
 function recordingEnv(send: ReturnType<typeof vi.fn>, prepared: string[]): Env {
@@ -276,6 +463,17 @@ async function seedInbound(
     options.repliedAt ?? null,
     options.lastReplyMessageId ?? null,
   ).run();
+}
+
+async function seedOutbound(id: string, inboxId: string): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO messages (
+      id, inbox_id, direction, envelope_from, envelope_to, subject, text_excerpt,
+      parse_status, agent_state, labels_json, headers_json, outbound_status,
+      received_at, created_at, updated_at
+    ) VALUES (?, ?, 'outbound', 'receive@mail.example.com', 'person@example.net', 'Re: Original', 'Sent',
+      'not_applicable', 'processed', '[]', '{}', 'accepted', ?, ?, ?)`,
+  ).bind(id, inboxId, now, now, now).run();
 }
 
 function waitForLaterTimestamp(previous: string): void {

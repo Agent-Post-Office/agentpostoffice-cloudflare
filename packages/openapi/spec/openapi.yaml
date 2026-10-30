@@ -213,7 +213,7 @@ paths:
         - { name: direction, in: query, schema: { enum: [inbound, outbound] } }
         - name: replied
           in: query
-          description: Limit to messages with or without an accepted reply. Independent of state.
+          description: Limit the feed to inbound messages with or without an accepted reply. Independent of processed state. Cannot be combined with direction=outbound.
           schema: { type: string, enum: ["true", "false"] }
         - { name: since, in: query, schema: { type: string, format: date-time } }
         - { name: until, in: query, schema: { type: string, format: date-time } }

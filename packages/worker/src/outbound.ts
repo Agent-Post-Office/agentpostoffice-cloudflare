@@ -294,8 +294,16 @@ export function acceptedReplyMark(
   return env.DB.prepare(
     `UPDATE messages
      SET replied_at = ?, last_reply_message_id = ?, updated_at = ?
-     WHERE id = ? AND inbox_id = ? AND direction = 'inbound' AND tombstoned_at IS NULL`,
-  ).bind(input.repliedAt, input.replyMessageId, input.repliedAt, input.originalMessageId, input.inboxId);
+     WHERE id = ? AND inbox_id = ? AND direction = 'inbound' AND tombstoned_at IS NULL
+       AND (replied_at IS NULL OR replied_at < ?)`,
+  ).bind(
+    input.repliedAt,
+    input.replyMessageId,
+    input.repliedAt,
+    input.originalMessageId,
+    input.inboxId,
+    input.repliedAt,
+  );
 }
 
 async function persistOutboundState(
@@ -314,7 +322,7 @@ async function persistOutboundState(
   const headersJson = state === "accepted"
     ? await headersWithProviderMessageId(messageId, cloudflareMessageId, env)
     : null;
-  const statements = [
+  await env.DB.batch([
     headersJson === null
       ? env.DB.prepare(
         "UPDATE messages SET outbound_status = ?, cloudflare_message_id = ?, sent_at = ?, updated_at = ? WHERE id = ?",
@@ -325,16 +333,20 @@ async function persistOutboundState(
     env.DB.prepare(
       "UPDATE idempotency_keys SET state = ?, response_json = ?, updated_at = ? WHERE api_key_id = ? AND endpoint = ? AND idempotency_key = ?",
     ).bind(state, JSON.stringify(response), now, keyId, endpoint, idempotencyKey),
-  ];
+  ]);
   if (state === "accepted" && reply) {
-    statements.push(acceptedReplyMark(env, {
-      originalMessageId: reply.originalMessageId,
-      inboxId: reply.inboxId,
-      replyMessageId: messageId,
-      repliedAt: now,
-    }));
+    try {
+      await acceptedReplyMark(env, {
+        originalMessageId: reply.originalMessageId,
+        inboxId: reply.inboxId,
+        replyMessageId: messageId,
+        repliedAt: now,
+      }).run();
+    } catch (error) {
+      // Acceptance is already stored. A marker failure must not become unknown.
+      console.error("reply_marker_failed", error instanceof Error ? error.name : "unknown");
+    }
   }
-  await env.DB.batch(statements);
   if (state === "accepted") await writeParsedMessageId(env, parsedR2Key, cloudflareMessageId);
 }
 
