@@ -116,12 +116,20 @@ export async function parseMessage(task: Extract<QueueTask, { kind: "parse" }>, 
       || parsed.references.slice(0, STORED_REFERENCES_MAX_BYTES);
   }
   const refineThread = Boolean(parsed.inReplyTo || parsed.references);
-  const link = refineThread
-    ? await resolveThreadLink(env, row.inbox_id, {
-      "in-reply-to": parsed.inReplyTo || "",
-      references: parsed.references || "",
-    }, row.id)
-    : null;
+  let link: { parentMessageId: string | null; threadId: string } | null = null;
+  if (refineThread) {
+    try {
+      link = await resolveThreadLink(env, row.inbox_id, {
+        "in-reply-to": parsed.inReplyTo || "",
+        references: parsed.references || "",
+      }, row.id);
+    } catch (error) {
+      // Parsing must finish even when the thread lookup cannot. The message
+      // becomes its own root instead of staying pending.
+      console.error("parse_thread_lookup_failed", row.id, error instanceof Error ? error.name : "unknown");
+      link = { parentMessageId: null, threadId: row.id };
+    }
+  }
 
   const activeScript = await env.DB.prepare(
     "SELECT id, revision FROM sieve_scripts WHERE inbox_id = ? AND active = 1",

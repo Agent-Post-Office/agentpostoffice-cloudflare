@@ -49,11 +49,17 @@ export async function handleInbound(message: ForwardableEmailMessage, env: Env):
   const sender = safeAddress(message.from);
   const subject = boundedHeader(message.headers.get("subject"), 998);
   const headers = selectedHeaders(message.headers);
-  const link = await resolveThreadLink(env, inbox.id, {
-    "message-id": message.headers.get("message-id") || "",
-    "in-reply-to": message.headers.get("in-reply-to") || "",
-    references: message.headers.get("references") || "",
-  }, messageId);
+  let link = { parentMessageId: null as string | null, threadId: messageId };
+  try {
+    link = await resolveThreadLink(env, inbox.id, {
+      "message-id": message.headers.get("message-id") || "",
+      "in-reply-to": message.headers.get("in-reply-to") || "",
+      references: message.headers.get("references") || "",
+    }, messageId);
+  } catch (error) {
+    // Threading is advisory. A lookup failure must not reject the SMTP delivery.
+    console.error("inbound_thread_lookup_failed", messageId, error instanceof Error ? error.name : "unknown");
+  }
   const rawBytes = await new Response(message.raw).arrayBuffer();
   if (rawBytes.byteLength !== message.rawSize) {
     throw new Error("Inbound message size changed while reading the raw stream");

@@ -188,6 +188,83 @@ describe("inbound thread links", () => {
     expect(ready).toEqual({ parent_message_id: "msg_sent", thread_id: "msg_conversation" });
   });
 
+  it("does not attach to a parent stored in another inbox", async () => {
+    await env.DB.prepare(
+      "INSERT INTO inboxes (id, domain, local_part, display_name, active, created_at, updated_at) VALUES ('inb_other', 'mail.example.com', 'other', 'Other', 1, ?, ?)",
+    ).bind(now, now).run();
+    await seedOutbound({
+      id: "msg_other",
+      providerId: "<shared@example.net>",
+      threadId: "msg_other",
+      inboxId: "inb_other",
+    });
+    await handleInbound(inboundMessage({
+      messageId: "<child@example.net>",
+      inReplyTo: "<shared@example.net>",
+      references: "<shared@example.net>",
+    }), workerEnv);
+
+    const isolated = await env.DB.prepare(
+      "SELECT id, parent_message_id, thread_id FROM messages WHERE direction = 'inbound'",
+    ).first<{ id: string; parent_message_id: string | null; thread_id: string | null }>();
+    expect(isolated?.parent_message_id).toBeNull();
+    expect(isolated?.thread_id).toBe(isolated?.id);
+
+    await seedOutbound({ id: "msg_same", providerId: "<shared@example.net>", threadId: "msg_same" });
+    await handleInbound(inboundMessage({
+      messageId: "<child-two@example.net>",
+      inReplyTo: "<shared@example.net>",
+    }), workerEnv);
+    const linked = await env.DB.prepare(
+      "SELECT parent_message_id, thread_id FROM messages WHERE json_extract(headers_json, '$.\"message-id\"') = '<child-two@example.net>'",
+    ).first<{ parent_message_id: string | null; thread_id: string | null }>();
+    expect(linked).toEqual({ parent_message_id: "msg_same", thread_id: "msg_same" });
+  });
+
+  it("stores inbound mail as a new root when the thread lookup fails", async () => {
+    await seedOutbound({ id: "msg_sent", providerId: "<real@example.net>", threadId: "msg_sent" });
+    await handleInbound(inboundMessage({
+      messageId: "<child@example.net>",
+      inReplyTo: "<real@example.net>",
+    }), threadLookupFailureEnv());
+
+    const row = await env.DB.prepare(
+      "SELECT id, parent_message_id, thread_id, raw_r2_key FROM messages WHERE direction = 'inbound'",
+    ).first<{ id: string; parent_message_id: string | null; thread_id: string | null; raw_r2_key: string | null }>();
+    expect(row?.parent_message_id).toBeNull();
+    expect(row?.thread_id).toBe(row?.id);
+    expect(row?.raw_r2_key).toBeTruthy();
+  });
+
+  it("finishes parsing as a new root when the thread lookup fails", async () => {
+    await seedOutbound({ id: "msg_sent", providerId: "<real@example.net>", threadId: "msg_sent" });
+    const rawKey = "messages/inb_thread/msg_parse_fail/raw.eml";
+    const raw = [
+      "From: Person <person@example.net>",
+      "To: receive@mail.example.com",
+      "Subject: Follow up",
+      "Message-ID: <followup@example.net>",
+      "In-Reply-To: <real@example.net>",
+      "References: <real@example.net>",
+      "",
+      "Hello",
+    ].join("\r\n");
+    await env.MAIL_BUCKET.put(rawKey, raw);
+    await env.DB.prepare(
+      `INSERT INTO messages (
+        id, inbox_id, direction, envelope_from, envelope_to, subject, raw_r2_key, parse_status,
+        agent_state, labels_json, headers_json, received_at, created_at, updated_at
+      ) VALUES ('msg_parse_fail', 'inb_thread', 'inbound', 'person@example.net', 'receive@mail.example.com', 'Follow up', ?, 'pending', 'unprocessed', '[]', '{}', ?, ?, ?)`,
+    ).bind(rawKey, now, now, now).run();
+
+    await parseMessage({ kind: "parse", messageId: "msg_parse_fail", rawR2Key: rawKey }, threadLookupFailureEnv());
+
+    const row = await env.DB.prepare(
+      "SELECT parse_status, parent_message_id, thread_id FROM messages WHERE id = 'msg_parse_fail'",
+    ).first<{ parse_status: string; parent_message_id: string | null; thread_id: string | null }>();
+    expect(row).toEqual({ parse_status: "ready", parent_message_id: null, thread_id: "msg_parse_fail" });
+  });
+
   it("returns the thread link from the message API without changing legacy rows", async () => {
     await seedInbound({
       id: "msg_visible",
@@ -237,16 +314,31 @@ async function seedInbound(input: {
   ).run();
 }
 
-async function seedOutbound(input: { id: string; providerId: string; threadId: string }): Promise<void> {
+function threadLookupFailureEnv(): Env {
+  return {
+    ...workerEnv,
+    DB: {
+      prepare(sql: string) {
+        if (sql.includes("json_extract")) throw new Error("thread lookup failed");
+        return env.DB.prepare(sql);
+      },
+      batch: env.DB.batch.bind(env.DB),
+      exec: env.DB.exec.bind(env.DB),
+    },
+  } as Env;
+}
+
+async function seedOutbound(input: { id: string; providerId: string; threadId: string; inboxId?: string }): Promise<void> {
   await env.DB.prepare(
     `INSERT INTO messages (
       id, inbox_id, direction, envelope_from, envelope_to, subject, parse_status, agent_state,
       labels_json, headers_json, outbound_status, cloudflare_message_id, parent_message_id, thread_id,
       received_at, created_at, updated_at
-    ) VALUES (?, 'inb_thread', 'outbound', 'receive@mail.example.com', 'person@example.net', 'Re: Original',
+    ) VALUES (?, ?, 'outbound', 'receive@mail.example.com', 'person@example.net', 'Re: Original',
       'not_applicable', 'processed', '[]', ?, 'accepted', ?, NULL, ?, ?, ?, ?)`,
   ).bind(
     input.id,
+    input.inboxId ?? "inb_thread",
     JSON.stringify({ "message-id": input.providerId }),
     input.providerId,
     input.threadId,

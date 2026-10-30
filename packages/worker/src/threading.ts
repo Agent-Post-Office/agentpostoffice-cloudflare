@@ -13,13 +13,18 @@ export function utf8ByteLength(value: string): number {
 
 export function messageIdsFromHeader(value: string | undefined): string[] {
   if (!value) return [];
-  return value.trim().split(/\s+/).filter((token) => token.length > 0);
+  return value
+    .split(/[\s,]+/)
+    .map((token) => token.replace(/^,+|,+$/g, "").trim())
+    .filter((token) => token.length > 0);
 }
 
 /**
  * Keep the thread root and the newest ids. Drop whole ids from the oldest
  * middle of the chain so a long thread still fits in one header value.
- * A single id that cannot fit intact is omitted rather than cut in half.
+ * When the root and the newest id cannot both fit, keep the newest id:
+ * that is the direct parent mail clients use to place the reply.
+ * An id that cannot fit intact is omitted rather than cut in half.
  */
 export function trimReferenceIds(ids: string[], maxBytes: number): string | undefined {
   const tokens = ids.map((id) => id.trim()).filter((id) => id.length > 0);
@@ -28,17 +33,24 @@ export function trimReferenceIds(ids: string[], maxBytes: number): string | unde
 
   const root = tokens[0]!;
   const rest = tokens.slice(1);
-  if (utf8ByteLength(root) > maxBytes) return newestThatFit(rest, maxBytes);
+  if (rest.length === 0) return utf8ByteLength(root) <= maxBytes ? root : undefined;
 
-  const count = largestSuffixThatFits(rest, maxBytes, root);
-  return [root, ...rest.slice(rest.length - count)].join(" ");
+  const newest = rest[rest.length - 1]!;
+  if (utf8ByteLength(root) <= maxBytes && utf8ByteLength(`${root} ${newest}`) <= maxBytes) {
+    const count = largestSuffixThatFits(rest, maxBytes, root);
+    return [root, ...rest.slice(rest.length - count)].join(" ");
+  }
+
+  const withoutRoot = newestThatFit(rest, maxBytes);
+  if (withoutRoot) return withoutRoot;
+  return utf8ByteLength(root) <= maxBytes ? root : undefined;
 }
 
 export function appendReference(references: string | undefined, messageId: string | undefined): string | undefined {
   const ids = messageIdsFromHeader(references);
   const appended = messageId?.trim();
   if (appended) ids.push(appended);
-  return trimReferenceIds(ids, EMAIL_HEADER_VALUE_MAX_BYTES);
+  return trimReferenceIds(dedupeMessageIds(ids), EMAIL_HEADER_VALUE_MAX_BYTES);
 }
 
 export function headerValueWithinLimit(value: string | undefined, maxBytes = EMAIL_HEADER_VALUE_MAX_BYTES): string | undefined {
@@ -107,6 +119,18 @@ function referenceCandidates(headers: Record<string, string>): string[] {
     limited[limited.length - 1] = root;
   }
   return limited;
+}
+
+function dedupeMessageIds(ids: string[]): string[] {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const id of ids) {
+    const key = canonicalMessageId(id);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    unique.push(id);
+  }
+  return unique;
 }
 
 function canonicalMessageId(value: string): string {
