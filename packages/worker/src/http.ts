@@ -34,7 +34,10 @@ export function errorResponse(error: unknown): Response {
 
 export async function readJson<T>(request: Request, maxBytes = 65_536): Promise<T> {
   const declaredLength = Number(request.headers.get("content-length") || "0");
-  if (declaredLength > maxBytes) throw new HttpError(413, "request_too_large", "Request body is too large");
+  if (declaredLength > maxBytes) {
+    await request.body?.cancel().catch(() => undefined);
+    throw new HttpError(413, "request_too_large", "Request body is too large");
+  }
 
   const bytes = new Uint8Array(await request.arrayBuffer());
   if (bytes.byteLength > maxBytes) throw new HttpError(413, "request_too_large", "Request body is too large");

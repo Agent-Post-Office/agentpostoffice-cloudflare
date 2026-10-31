@@ -3,6 +3,7 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-07-10",
   "compatibility_flags": ["nodejs_compat"],
+  "minify": true,
   "vars": {
     "MAIL_DOMAIN": "mail.example.com",
     "MAX_INBOUND_BYTES": "10485760",

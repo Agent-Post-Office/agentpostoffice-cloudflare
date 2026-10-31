@@ -1,5 +1,6 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -11,7 +12,9 @@ import {
   MCP_MAX_INLINE_ATTACHMENT_BYTES,
   MCP_MAX_TOOL_OUTPUT_BYTES,
   MCP_SCOPES,
+  type McpOperations,
   output,
+  registerSharedTools,
   sharedTools,
 } from "../packages/mcp/src/catalog.js";
 import { createAgentPostOfficeMcpServer } from "../packages/mcp/src/server.js";
@@ -426,10 +429,53 @@ describe("shared MCP catalog", () => {
     expect(MCP_MAX_INLINE_ATTACHMENT_BYTES).toBeLessThan(MCP_MAX_TOOL_OUTPUT_BYTES);
   });
 
-  it("documents the per-instance remote MCP URL and bearer header", async () => {
+  it("disables tools the caller is not allowed to run", async () => {
+    const sendMessage = vi.fn();
+    const server = new McpServer({ name: "agentpostoffice", version: "0.1.0" });
+    registerSharedTools(server, { sendMessage } as unknown as McpOperations, {
+      allows: (scope) => scope === "messages:read",
+    });
+    const client = new Client({ name: "test", version: "1.0.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+      const names = (await client.listTools()).tools.map((tool) => tool.name);
+      expect(names).toContain("list_inboxes");
+      expect(names).not.toContain("send_message");
+      const result = await client.callTool({
+        name: "send_message",
+        arguments: {
+          inbox_id: "inb_test",
+          to: "person@example.net",
+          subject: "Hello",
+          text: "Body",
+          idempotency_key: "scope-gate",
+        },
+      });
+      expect(result.isError).toBe(true);
+      expect(result.content).toEqual([{ type: "text", text: "MCP error -32602: Tool send_message disabled" }]);
+      expect(sendMessage).not.toHaveBeenCalled();
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("documents the per-instance remote MCP URL, bearer header, and small remote scopes", async () => {
     const readme = await readFile("README.md", "utf8");
     expect(readme).toContain("https://<your-worker>/mcp");
     expect(readme).toContain("Authorization");
     expect(readme).toContain("Bearer apo_<key-id>_<secret>");
+    expect(readme).toContain("smallest scopes");
+    expect(readme).toContain("prompt injection");
+    const upgrading = await readFile("docs/UPGRADING.md", "utf8");
+    expect(upgrading).toContain("1048576");
+    expect(upgrading).toContain("stdio");
+  });
+
+  it("imports the MCP handler only when the request targets /mcp", async () => {
+    const source = await readFile("packages/worker/src/api.ts", "utf8");
+    expect(source).not.toMatch(/import\s*\{[^}]*handleMcp[^}]*\}\s*from\s*"\.\/mcp\.js"/);
+    expect(source).toContain('await import("./mcp.js")');
   });
 });

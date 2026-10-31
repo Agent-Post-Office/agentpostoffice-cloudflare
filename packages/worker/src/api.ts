@@ -1,6 +1,5 @@
 import openapi from "./openapi.generated.json" with { type: "json" };
 import { authenticate, requireScope } from "./auth.js";
-import { handleMcp } from "./mcp.js";
 import { compileSieve, evaluateSieve, SieveValidationError } from "@agentpostoffice/sieve";
 import { errorResponse, HttpError, json, readJson, requireString } from "./http.js";
 import { replyToMessage, sendNew } from "./outbound.js";
@@ -45,7 +44,11 @@ export async function handleApi(request: Request, env: Env): Promise<Response> {
     if (url.pathname === "/health" && request.method === "GET") {
       return json({ ok: true, service: "agentpostoffice" });
     }
-    if (url.pathname === "/mcp") return handleMcp(request, env);
+    if (url.pathname === "/mcp") {
+      // Keep the MCP SDK and zod off the email and queue paths until a client calls /mcp.
+      const { handleMcp } = await import("./mcp.js");
+      return handleMcp(request, env);
+    }
     if (!url.pathname.startsWith("/v1/")) throw new HttpError(404, "not_found", "Route not found");
     const auth = await authenticate(request, env);
     return await route(request, url, auth, env);

@@ -1,5 +1,4 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { z, type ZodRawShape } from "zod";
 
 // Serialized tool text, not the raw email. One mebibyte covers a normal message
@@ -235,10 +234,12 @@ export interface RegisterSharedToolsOptions {
 
 export function registerSharedTools(server: McpServer, ops: McpOperations, options: RegisterSharedToolsOptions = {}): void {
   for (const tool of sharedTools) {
-    server.registerTool(tool.name, {
+    const registered = server.registerTool(tool.name, {
       description: tool.description,
       inputSchema: tool.inputSchema,
     }, async (args) => {
+      // disable() hides a tool and the SDK refuses the call before this callback.
+      // The scope check still applies if the handler is reached while enabled.
       if (options.allows && !options.allows(tool.scope)) return insufficientScopeResult();
       try {
         return await executeSharedTool(tool.name, (args ?? {}) as Record<string, unknown>, ops);
@@ -251,10 +252,7 @@ export function registerSharedTools(server: McpServer, ops: McpOperations, optio
         throw error;
       }
     });
-  }
-  if (options.allows) {
-    const allowed = new Set(sharedTools.filter((tool) => options.allows?.(tool.scope)).map((tool) => tool.name));
-    filterListedTools(server, allowed);
+    if (options.allows && !options.allows(tool.scope)) registered.disable();
   }
 }
 
@@ -402,20 +400,6 @@ export function bytesToBase64(bytes: Uint8Array): string {
     binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
   }
   return btoa(binary);
-}
-
-function filterListedTools(server: McpServer, allowed: ReadonlySet<string>): void {
-  // The SDK lists every registered tool. Replace that handler so tools/list
-  // follows the token, while tools/call of a hidden name still runs our callback.
-  const handlers = (server.server as unknown as {
-    _requestHandlers?: Map<string, (request: { method: string; params?: unknown }, extra: unknown) => Promise<{ tools?: Array<{ name: string }> }>>;
-  })._requestHandlers;
-  const original = handlers?.get("tools/list");
-  if (!original) throw new Error("MCP tool list handler is unavailable");
-  server.server.setRequestHandler(ListToolsRequestSchema, async () => {
-    const listed = await original({ method: "tools/list", params: {} }, {});
-    return { ...listed, tools: (listed.tools ?? []).filter((tool) => allowed.has(tool.name)) };
-  });
 }
 
 function requiredString(args: Record<string, unknown>, key: string): string {

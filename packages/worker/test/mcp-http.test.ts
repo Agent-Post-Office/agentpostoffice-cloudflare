@@ -58,12 +58,25 @@ describe("remote MCP over HTTPS", () => {
       expect(bad.status).toBe(401);
       expect(await bad.json()).toEqual({ error: { code: "unauthorized", message: "Invalid or expired bearer token" } });
 
-      await env.DB.prepare("UPDATE api_keys SET revoked_at = '2020-01-01T00:00:00.000Z'").run();
+      await env.DB.prepare("UPDATE api_keys SET revoked_at = '2020-01-01T00:00:00.000Z' WHERE key_id = ?").bind(readKeyId).run();
       const revoked = await postMcp(
         { jsonrpc: "2.0", id: 1, method: "initialize", params: initializeParams() },
         readToken,
       );
       expect(revoked.status).toBe(401);
+      expect(await revoked.json()).toEqual({ error: { code: "unauthorized", message: "Invalid or expired bearer token" } });
+
+      const expiredKeyId = "expkey123456";
+      const expiredToken = `apo_${expiredKeyId}_${"e".repeat(43)}`;
+      await insertKey(expiredKeyId, expiredToken, ["messages:read"]);
+      await env.DB.prepare("UPDATE api_keys SET expires_at = '2000-01-01T00:00:00.000Z' WHERE key_id = ?").bind(expiredKeyId).run();
+      const expired = await postMcp(
+        { jsonrpc: "2.0", id: 1, method: "initialize", params: initializeParams() },
+        expiredToken,
+      );
+      expect(expired.status).toBe(401);
+      expect(await expired.json()).toEqual({ error: { code: "unauthorized", message: "Invalid or expired bearer token" } });
+      expect(JSON.stringify(logs)).not.toContain(expiredToken);
     } finally {
       console.error = original;
     }
@@ -106,7 +119,7 @@ describe("remote MCP over HTTPS", () => {
     expect(result.headers.get("access-control-allow-origin")).toBeNull();
   });
 
-  it("returns insufficient_scope for a write tool when the token is read-only", async () => {
+  it("does not run a write tool when the token is read-only", async () => {
     await insertKey(readKeyId, readToken, ["messages:read"]);
     await seedInbox();
     const result = await rpc(readToken, "tools/call", {
@@ -121,9 +134,7 @@ describe("remote MCP over HTTPS", () => {
     });
     expect(result.status).toBe(200);
     expect(result.result?.isError).toBe(true);
-    expect(JSON.parse(result.result?.content?.[0]?.text ?? "")).toEqual({
-      error: { code: "insufficient_scope", message: "Token does not have the required scope" },
-    });
+    expect(result.result?.content?.[0]?.text).toBe("MCP error -32602: Tool send_message disabled");
     expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM messages").first<{ count: number }>()).toEqual({ count: 0 });
   });
 
@@ -196,6 +207,95 @@ describe("remote MCP over HTTPS", () => {
       body: "x".repeat(MCP_MAX_REQUEST_BODY_BYTES + 1),
     }), workerEnv);
     expect(huge.status).toBe(413);
+  });
+
+  it("rejects a JSON-RPC batch before any tool runs", async () => {
+    await insertKey(fullKeyId, fullToken, ["messages:read", "messages:send"]);
+    await seedInbox();
+    const batch = await postMcp([
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: {
+          name: "send_message",
+          arguments: {
+            inbox_id: "inb_test",
+            to: "person@example.net",
+            subject: "Hello",
+            text: "Body",
+            idempotency_key: "batch-send",
+          },
+        },
+      },
+      { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} },
+    ], fullToken);
+    expect(batch.status).toBe(400);
+    expect(await batch.json()).toEqual({
+      jsonrpc: "2.0",
+      id: null,
+      error: { code: -32600, message: "Invalid Request: JSON-RPC batches are not supported" },
+    });
+    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM messages").first<{ count: number }>()).toEqual({ count: 0 });
+
+    const empty = await postMcp([], fullToken);
+    expect(empty.status).toBe(400);
+    expect((await empty.json() as { error?: { code?: number } }).error?.code).toBe(-32600);
+  });
+
+  it("rejects dot-segment ids before they can change the route", async () => {
+    await insertKey(readKeyId, readToken, ["messages:read"]);
+    await seedInbox();
+    await seedMessage("msg_1");
+    for (const messageId of [".", "..", "%2e", "%2E%2e"]) {
+      const result = await rpc(readToken, "tools/call", {
+        name: "get_message",
+        arguments: { message_id: messageId },
+      });
+      expect(result.status, messageId).toBe(200);
+      expect(result.result?.isError, messageId).toBe(true);
+      expect(JSON.parse(result.result?.content?.[0]?.text ?? "").error.code, messageId).toBe("invalid_request");
+      expect(result.result?.content?.[0]?.text, messageId).not.toContain("Question");
+    }
+
+    const allowed = await rpc(readToken, "tools/call", {
+      name: "get_message",
+      arguments: { message_id: "msg_1" },
+    });
+    expect(allowed.result?.isError).not.toBe(true);
+    expect(allowed.result?.content?.[0]?.text).toContain("Question");
+  });
+
+  it("stops a chunked body with no Content-Length at the request cap", async () => {
+    await insertKey(readKeyId, readToken, ["messages:read"]);
+    const chunkSize = 64 * 1024;
+    let pulled = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (pulled > MCP_MAX_REQUEST_BODY_BYTES + chunkSize) {
+          controller.error(new Error("body read continued past the cap"));
+          return;
+        }
+        controller.enqueue(new Uint8Array(chunkSize));
+        pulled += chunkSize;
+      },
+    });
+    const request = new Request("https://worker.example/mcp", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${readToken}`,
+        Accept: "application/json, text/event-stream",
+        "Content-Type": "application/json",
+      },
+      body: stream,
+      duplex: "half",
+    });
+    expect(request.headers.get("content-length")).toBeNull();
+    const response = await handleApi(request, workerEnv);
+    expect(response.status).toBe(413);
+    expect(pulled).toBeLessThanOrEqual(MCP_MAX_REQUEST_BODY_BYTES + chunkSize);
+    const body = await response.json() as { error?: { code?: number } };
+    expect(body.error?.code).toBe(-32000);
   });
 
   it("lists the full HTTP tool set for a token that holds every scope", async () => {
