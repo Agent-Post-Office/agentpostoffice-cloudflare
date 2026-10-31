@@ -38,7 +38,7 @@ The Phase 1 implementation is test-covered, and a live deployment has proved the
 | `@agentpostoffice/worker` | Email Worker, REST API, D1 schema, R2 persistence, Queue parsing/deletion, Email Sending. |
 | `@agentpostoffice/client` | Typed REST client used by the CLI and MCP server. |
 | `@agentpostoffice/cli` | Credential-aware mailbox/message/send/reply CLI. |
-| `@agentpostoffice/mcp` | Bounded MCP tools with explicit untrusted-content labels. |
+| `@agentpostoffice/mcp` | Shared MCP tool catalog and the local stdio server. The Worker also serves those tools at `POST /mcp`. |
 | `@agentpostoffice/openapi` | OpenAPI 3.1 contract. |
 
 ## What is implemented
@@ -360,16 +360,35 @@ Send and reply requests require an `Idempotency-Key`. Reusing the key with diffe
 
 ## MCP
 
-Run the built server with credentials in its environment:
+Each self-hosted install is its own Worker. A client that can only take an MCP URL and a header connects to that Worker directly. There is no central Agent Post Office service. Use the same bearer key the REST API accepts:
+
+```json
+{
+  "mcpServers": {
+    "agentpostoffice": {
+      "url": "https://<your-worker>/mcp",
+      "headers": {
+        "Authorization": "Bearer apo_<key-id>_<secret>"
+      }
+    }
+  }
+}
+```
+
+`POST /mcp` speaks stateless MCP Streamable HTTP. `GET` and `DELETE` return `405`. The token is the `Authorization` header only; do not put it in the URL or in logs. `tools/list` returns the tools that token's scopes allow. A tool outside those scopes is disabled, and calling it does not run. Give a remote HTTP `/mcp` key the smallest scopes it needs, such as `messages:read` or `messages:read` plus `messages:reply`. A remote client is more exposed to prompt injection from mail. Requests are authenticated with the same key lookup as `/v1`, and this endpoint does not add a separate application rate limit. Browser CORS is not enabled: the clients for this endpoint send the bearer header from their own process. The POST body is limited to 1200000 bytes. JSON-RPC batches are rejected. A tool result larger than 1048576 bytes is refused on both this endpoint and the local stdio server.
+
+`get_attachment` returns one attachment as base64 after checking its stored size and SHA-256 checksum. Attachments larger than 131072 bytes are refused. The bytes are untrusted. The caller must pass `acknowledge_untrusted_bytes: true`.
+
+The local stdio server remains available for a process on the same machine. It adds `save_raw_message` and `save_attachment`, which the HTTPS endpoint does not expose:
 
 ```bash
-AGENTPOSTOFFICE_URL=https://agentpostoffice.example.workers.dev \
+AGENTPOSTOFFICE_URL=https://<your-worker> \
 AGENTPOSTOFFICE_TOKEN='apo_<key-id>_<secret>' \
 AGENTPOSTOFFICE_DOWNLOAD_DIR="$HOME/Downloads/agentpostoffice" \
 node packages/mcp/dist/index.js
 ```
 
-MCP message output is labeled `untrusted_content: true`. Attachment metadata can be inspected without downloading. The explicit save tools require `confirmed: true`, accept only a filename, and create a new `0600` file inside `AGENTPOSTOFFICE_DOWNLOAD_DIR`; they never open the saved bytes. Before creating an attachment file, MCP verifies the downloaded byte length and SHA-256 checksum against stored metadata. The download directory defaults to `~/Downloads/agentpostoffice`.
+MCP message output is labeled `untrusted_content: true`. Attachment metadata can be inspected without downloading. The explicit save tools require `confirmed: true`, accept only a filename, and create a new `0600` file inside `AGENTPOSTOFFICE_DOWNLOAD_DIR`; they never open the saved bytes. Before creating an attachment file, MCP verifies the downloaded byte length and SHA-256 checksum against stored metadata. The download directory defaults to `~/Downloads/agentpostoffice`. Delete, Sieve activation, and Sieve disable also require `confirmed: true`. Send and reply require their scopes and an idempotency key.
 
 ## Production status
 

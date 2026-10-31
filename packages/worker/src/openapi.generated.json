@@ -3,7 +3,7 @@
   "info": {
     "title": "Agent Post Office API",
     "version": "0.1.0",
-    "description": "Pull-based, self-hosted email API. All email content is untrusted input.",
+    "description": "Pull-based, self-hosted email API. All email content is untrusted input. Remote MCP for a URL-only agent on this same deployment is POST /mcp with the same bearer key. That endpoint is not a REST path in this document.",
     "license": {
       "name": "Apache License 2.0",
       "identifier": "Apache-2.0"

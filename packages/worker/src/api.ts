@@ -44,9 +44,22 @@ export async function handleApi(request: Request, env: Env): Promise<Response> {
     if (url.pathname === "/health" && request.method === "GET") {
       return json({ ok: true, service: "agentpostoffice" });
     }
+    if (url.pathname === "/mcp") {
+      // Keep the MCP SDK and zod off the email and queue paths until a client calls /mcp.
+      const { handleMcp } = await import("./mcp.js");
+      return handleMcp(request, env);
+    }
     if (!url.pathname.startsWith("/v1/")) throw new HttpError(404, "not_found", "Route not found");
     const auth = await authenticate(request, env);
     return await route(request, url, auth, env);
+  } catch (error) {
+    return errorResponse(error);
+  }
+}
+
+export async function dispatchAuthorized(request: Request, auth: AuthContext, env: Env): Promise<Response> {
+  try {
+    return await route(request, new URL(request.url), auth, env);
   } catch (error) {
     return errorResponse(error);
   }
@@ -513,6 +526,45 @@ async function streamRaw(messageId: string, env: Env): Promise<Response> {
   return new Response(object.body, {
     headers: secureDownloadHeaders("message/rfc822", `${messageId}.eml`, object.size),
   });
+}
+
+export async function readAttachmentPayload(
+  messageId: string,
+  attachmentId: string,
+  env: Env,
+  maxBytes: number,
+): Promise<{
+  id: string;
+  filename: string | null;
+  media_type: string;
+  disposition: string;
+  size: number;
+  checksum_sha256: string;
+  bytes: Uint8Array;
+}> {
+  await getMessage(messageId, env);
+  const row = await env.DB.prepare(
+    "SELECT * FROM attachments WHERE id = ? AND message_id = ?",
+  ).bind(attachmentId, messageId).first<AttachmentRow>();
+  if (!row) throw new HttpError(404, "not_found", "Attachment not found");
+  if (!Number.isSafeInteger(row.size) || row.size < 0) {
+    throw new HttpError(400, "invalid_attachment", "Attachment metadata has an invalid size");
+  }
+  if (row.size > maxBytes) throw new HttpError(413, "attachment_too_large", `Attachment exceeds ${maxBytes} bytes`);
+  const object = await env.MAIL_BUCKET.get(row.r2_key);
+  if (!object) throw new HttpError(404, "not_found", "Attachment object not found");
+  if (object.size > maxBytes) throw new HttpError(413, "attachment_too_large", `Attachment exceeds ${maxBytes} bytes`);
+  const bytes = new Uint8Array(await object.arrayBuffer());
+  if (bytes.byteLength > maxBytes) throw new HttpError(413, "attachment_too_large", `Attachment exceeds ${maxBytes} bytes`);
+  return {
+    id: row.id,
+    filename: row.filename,
+    media_type: row.media_type,
+    disposition: row.disposition,
+    size: row.size,
+    checksum_sha256: row.checksum_sha256,
+    bytes,
+  };
 }
 
 async function streamAttachment(messageId: string, attachmentId: string, env: Env): Promise<Response> {

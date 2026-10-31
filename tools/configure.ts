@@ -28,6 +28,7 @@ const configuration = {
   main: "src/index.ts",
   compatibility_date: "2026-07-10",
   compatibility_flags: ["nodejs_compat"],
+  minify: true,
   workers_dev: true,
   observability: { enabled: true },
   vars: {

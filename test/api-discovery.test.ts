@@ -26,6 +26,11 @@ describe("canonical OpenAPI discovery", () => {
     expect(JSON.parse(readFileSync("packages/worker/src/openapi.generated.json", "utf8"))).toEqual(spec);
   });
 
+  it("notes remote MCP without turning JSON-RPC into a REST path", () => {
+    expect(spec.info.description).toContain("POST /mcp");
+    expect(spec.paths).not.toHaveProperty("/mcp");
+  });
+
   it("documents the protected route inventory and scope checks", () => {
     const operations = Object.entries(spec.paths).flatMap(([path, item]) =>
       Object.entries(item as Record<string, any>).filter(([method, operation]) => ["get", "post", "patch", "delete"].includes(method) && !operation.security)
