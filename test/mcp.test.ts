@@ -481,6 +481,18 @@ describe("shared MCP catalog", () => {
     expect(upgrading).toContain("stdio");
   });
 
+  it("keeps the remote MCP key snippets identical", async () => {
+    const bashBlocks = (text: string) => [...text.matchAll(/```bash\n([\s\S]*?)```/g)].map((match) => match[1]);
+    const readme = bashBlocks(await readFile("README.md", "utf8")).filter((block) => block.includes("mcp-remote"));
+    const install = bashBlocks(await readFile("docs/INSTALL-REFERENCE.md", "utf8")).filter((block) => block.includes("mcp-remote"));
+    expect(readme).toHaveLength(1);
+    expect(install).toHaveLength(1);
+    expect(readme[0]).toBe(install[0]);
+    expect(readme[0]).toContain("D1 insert failed; no token file written");
+    expect(readme[0]).not.toContain("printf '%s\\n'");
+    expect(readme[0]).toContain("printf '%s' \"$APO_TOKEN\" > \"$APO_MCP_TOKEN_FILE\"");
+  });
+
   it("imports the MCP handler only when the request targets /mcp", async () => {
     const source = await readFile("packages/worker/src/api.ts", "utf8");
     expect(source).not.toMatch(/import\s*\{[^}]*handleMcp[^}]*\}\s*from\s*"\.\/mcp\.js"/);

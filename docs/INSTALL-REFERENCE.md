@@ -342,15 +342,18 @@ else
     APO_SCOPES='["messages:read"]'
   fi
 
-  npx wrangler d1 execute agentpostoffice --remote \
+  if npx wrangler d1 execute agentpostoffice --remote \
     --config packages/worker/wrangler.jsonc \
-    --command "INSERT INTO api_keys (key_id, digest_sha256, label, scopes_json, expires_at, created_at, revoked_at) VALUES ('$APO_KEY_ID', '$APO_DIGEST', 'mcp-remote', '$APO_SCOPES', NULL, '$APO_CREATED_AT', NULL);"
-
-  mkdir -p -- "$(dirname -- "$APO_MCP_TOKEN_FILE")"
-  if (set -o noclobber; printf '%s\n' "$APO_TOKEN" > "$APO_MCP_TOKEN_FILE"); then
-    unset APO_TOKEN APO_KEY_ID APO_DIGEST APO_CREATED_AT APO_SCOPES
+    --command "INSERT INTO api_keys (key_id, digest_sha256, label, scopes_json, expires_at, created_at, revoked_at) VALUES ('$APO_KEY_ID', '$APO_DIGEST', 'mcp-remote', '$APO_SCOPES', NULL, '$APO_CREATED_AT', NULL);"; then
+    mkdir -p -- "$(dirname -- "$APO_MCP_TOKEN_FILE")"
+    if (set -o noclobber; printf '%s' "$APO_TOKEN" > "$APO_MCP_TOKEN_FILE"); then
+      unset APO_TOKEN APO_KEY_ID APO_DIGEST APO_CREATED_AT APO_SCOPES
+    else
+      echo 'Could not create a new remote MCP token file. APO_TOKEN is still set in this shell. Do not print it.' >&2
+    fi
   else
-    echo 'Could not create a new remote MCP token file. APO_TOKEN is still set in this shell. Do not print it.' >&2
+    echo 'D1 insert failed; no token file written' >&2
+    unset APO_TOKEN APO_KEY_ID APO_DIGEST APO_CREATED_AT APO_SCOPES
   fi
 fi
 umask "$APO_SAVED_UMASK"
