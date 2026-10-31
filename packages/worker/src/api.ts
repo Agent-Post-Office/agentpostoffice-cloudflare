@@ -354,7 +354,7 @@ async function listMessages(url: URL, env: Env): Promise<Response> {
     WHERE ${clauses.join(" AND ")}
     ORDER BY m.received_at ${order.toUpperCase()}, m.id ${order.toUpperCase()} LIMIT ?`;
   bindings.push(limit + 1);
-  const result = await env.DB.prepare(query).bind(...bindings).all<MessageRow & Pick<InboxRow, "domain" | "local_part" | "display_name">>();
+  const result = await readArchiveQuery(() => env.DB.prepare(query).bind(...bindings).all<MessageRow & Pick<InboxRow, "domain" | "local_part" | "display_name">>());
   const hasMore = result.results.length > limit;
   const rows = result.results.slice(0, limit);
   const last = rows.at(-1);
@@ -389,30 +389,73 @@ async function getMessageResponse(messageId: string, url: URL, env: Env): Promis
 }
 
 async function updateMessage(request: Request, messageId: string, env: Env): Promise<Response> {
-  const row = await getMessage(messageId, env);
   const input = await readJson<Record<string, unknown>>(request);
-  const state = input.state === undefined ? row.agent_state : input.state;
-  if (state !== "processed" && state !== "unprocessed") throw new HttpError(400, "invalid_request", "state is invalid");
-  const labels = input.labels === undefined ? parseJsonArray(row.labels_json) : validateLabels(input.labels);
-  if (input.archived !== undefined && typeof input.archived !== "boolean") {
-    throw new HttpError(400, "invalid_request", "archived must be a boolean");
+  const assignments: string[] = [];
+  const bindings: unknown[] = [];
+  if (input.state !== undefined) {
+    if (input.state !== "processed" && input.state !== "unprocessed") throw new HttpError(400, "invalid_request", "state is invalid");
+    assignments.push("agent_state = ?");
+    bindings.push(input.state);
+  }
+  if (input.labels !== undefined) {
+    assignments.push("labels_json = ?");
+    bindings.push(JSON.stringify(validateLabels(input.labels)));
   }
   const updatedAt = nowIso();
-  const currentArchivedAt = row.archived_at ?? null;
-  // State-only updates omit archived_at so a Worker deployed before migration
-  // 0005 can still acknowledge mail. Archive writes name the column and fail
-  // until that migration is applied.
-  if (input.archived === undefined) {
-    await env.DB.prepare(
-      "UPDATE messages SET agent_state = ?, labels_json = ?, updated_at = ? WHERE id = ?",
-    ).bind(state, JSON.stringify(labels), updatedAt, messageId).run();
-    return json({ data: { id: messageId, state, labels, archived_at: currentArchivedAt, updated_at: updatedAt } });
+  // Archive writes name archived_at and fail until migration 0005. Other
+  // updates omit that column, and every update writes only fields present in
+  // the body so a stale read cannot revert a concurrent change.
+  if (input.archived !== undefined) {
+    if (typeof input.archived !== "boolean") throw new HttpError(400, "invalid_request", "archived must be a boolean");
+    if (input.archived) {
+      assignments.push("archived_at = COALESCE(archived_at, ?)");
+      bindings.push(updatedAt);
+    } else {
+      assignments.push("archived_at = NULL");
+    }
   }
-  const archivedAt = input.archived ? (currentArchivedAt ?? updatedAt) : null;
-  await env.DB.prepare(
-    "UPDATE messages SET agent_state = ?, labels_json = ?, archived_at = ?, updated_at = ? WHERE id = ?",
-  ).bind(state, JSON.stringify(labels), archivedAt, updatedAt, messageId).run();
-  return json({ data: { id: messageId, state, labels, archived_at: archivedAt, updated_at: updatedAt } });
+  assignments.push("updated_at = ?");
+  bindings.push(updatedAt, messageId);
+  const updated = await readArchiveQuery(() => env.DB.prepare(
+    `UPDATE messages SET ${assignments.join(", ")} WHERE id = ? AND tombstoned_at IS NULL RETURNING *`,
+  ).bind(...bindings).all<MessageRow>());
+  const row = updated.results[0];
+  if (!row) throw new HttpError(404, "not_found", "Message not found");
+  return json({
+    data: {
+      id: row.id,
+      state: row.agent_state,
+      labels: parseJsonArray(row.labels_json),
+      archived_at: row.archived_at ?? null,
+      updated_at: row.updated_at,
+    },
+  });
+}
+
+async function readArchiveQuery<T>(work: () => Promise<T>): Promise<T> {
+  try {
+    return await work();
+  } catch (error) {
+    if (missingArchivedColumn(error)) {
+      throw new HttpError(503, "migration_pending", "archived_at requires migration 0005");
+    }
+    throw error;
+  }
+}
+
+function missingArchivedColumn(error: unknown): boolean {
+  const pending = /no such column:\s*archived_at/i;
+  const seen = new Set<unknown>();
+  let current: unknown = error;
+  while (current && !seen.has(current)) {
+    seen.add(current);
+    if (typeof current === "string") return pending.test(current);
+    if (typeof current !== "object") return false;
+    const record = current as { message?: unknown; cause?: unknown };
+    if (typeof record.message === "string" && pending.test(record.message)) return true;
+    current = record.cause;
+  }
+  return false;
 }
 
 async function deleteMessage(messageId: string, env: Env): Promise<Response> {

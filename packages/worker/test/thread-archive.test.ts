@@ -296,6 +296,111 @@ describe("archive marker", () => {
     const openBody = await open.json() as { data: Array<{ id: string }> };
     expect(openBody.data.map((message) => message.id)).toEqual(["msg_open"]);
   });
+
+  it("pages an archived feed in descending order without including unarchived rows", async () => {
+    await seedMessage({ id: "msg_z", inboxId: "inb_home", threadId: thread, receivedAt: "2026-07-05T00:00:00.000Z", archivedAt: "2026-07-05T01:00:00.000Z" });
+    await seedMessage({ id: "msg_y", inboxId: "inb_home", threadId: thread, receivedAt: "2026-07-04T00:00:00.000Z" });
+    await seedMessage({ id: "msg_b", inboxId: "inb_home", threadId: thread, receivedAt: "2026-07-03T00:00:00.000Z", archivedAt: "2026-07-03T01:00:00.000Z" });
+    await seedMessage({ id: "msg_a", inboxId: "inb_home", threadId: thread, receivedAt: "2026-07-03T00:00:00.000Z", archivedAt: "2026-07-03T01:00:00.000Z" });
+    await seedMessage({ id: "msg_w", inboxId: "inb_home", threadId: thread, receivedAt: "2026-07-01T00:00:00.000Z", archivedAt: "2026-07-01T01:00:00.000Z" });
+
+    const page = await handleApi(readRequest("/v1/messages?archived=true&order=desc&limit=2"), workerEnv);
+    expect(page.status).toBe(200);
+    const pageBody = await page.json() as { data: Array<{ id: string }>; next_cursor: string };
+    expect(pageBody.data.map((message) => message.id)).toEqual(["msg_z", "msg_b"]);
+    const next = await handleApi(readRequest(
+      `/v1/messages?archived=true&order=desc&limit=2&cursor=${encodeURIComponent(pageBody.next_cursor)}`,
+    ), workerEnv);
+    expect(next.status).toBe(200);
+    const nextBody = await next.json() as { data: Array<{ id: string }>; next_cursor: string | null };
+    expect(nextBody.data.map((message) => message.id)).toEqual(["msg_a", "msg_w"]);
+    expect(nextBody.next_cursor).toBeNull();
+    expect([...pageBody.data, ...nextBody.data].map((message) => message.id)).not.toContain("msg_y");
+  });
+
+  it("archives outbound mail, rejects a tombstone and a null flag, and can set state in the same write", async () => {
+    await seedMessage({
+      id: "msg_out",
+      inboxId: "inb_home",
+      threadId: thread,
+      receivedAt: now,
+      direction: "outbound",
+      agentState: "unprocessed",
+    });
+    await seedMessage({
+      id: "msg_dead",
+      inboxId: "inb_home",
+      threadId: thread,
+      receivedAt: now,
+      tombstonedAt: "2026-07-11T01:00:00.000Z",
+    });
+    await seedMessage({
+      id: "msg_both",
+      inboxId: "inb_home",
+      threadId: thread,
+      receivedAt: now,
+      agentState: "unprocessed",
+      repliedAt: "2026-07-11T03:00:00.000Z",
+      lastReplyMessageId: "msg_prior_reply",
+      labelsJson: JSON.stringify(["keep"]),
+    });
+
+    const outbound = await handleApi(patchRequest("msg_out", { archived: true }), workerEnv);
+    expect(outbound.status).toBe(200);
+    const outboundBody = await outbound.json() as { data: { state: string; archived_at: string | null } };
+    expect(outboundBody.data.state).toBe("unprocessed");
+    expect(outboundBody.data.archived_at).toMatch(isoTimestamp);
+    expect(await row("msg_out")).toMatchObject({ agent_state: "unprocessed", archived_at: outboundBody.data.archived_at });
+
+    const tombstone = await handleApi(patchRequest("msg_dead", { archived: true }), workerEnv);
+    expect(tombstone.status).toBe(404);
+    expect(await tombstone.json()).toEqual({ error: { code: "not_found", message: "Message not found" } });
+    expect(await row("msg_dead")).toMatchObject({ archived_at: null, agent_state: "unprocessed" });
+
+    const invalid = await handleApi(patchRequest("msg_both", { archived: null }), workerEnv);
+    expect(invalid.status).toBe(400);
+    expect(await invalid.json()).toEqual({ error: { code: "invalid_request", message: "archived must be a boolean" } });
+    expect(await row("msg_both")).toMatchObject({ archived_at: null, agent_state: "unprocessed" });
+
+    const combined = await handleApi(patchRequest("msg_both", { state: "processed", archived: true }), workerEnv);
+    expect(combined.status).toBe(200);
+    const combinedBody = await combined.json() as {
+      data: { state: string; labels: string[]; archived_at: string | null };
+    };
+    expect(combinedBody.data.state).toBe("processed");
+    expect(combinedBody.data.labels).toEqual(["keep"]);
+    expect(combinedBody.data.archived_at).toMatch(isoTimestamp);
+    expect(await row("msg_both")).toMatchObject({
+      agent_state: "processed",
+      labels_json: JSON.stringify(["keep"]),
+      archived_at: combinedBody.data.archived_at,
+      replied_at: "2026-07-11T03:00:00.000Z",
+      last_reply_message_id: "msg_prior_reply",
+    });
+  });
+
+  it("does not revert a state change that lands before an archive-only write", async () => {
+    await seedMessage({
+      id: "msg_race",
+      inboxId: "inb_home",
+      threadId: thread,
+      receivedAt: now,
+      agentState: "unprocessed",
+      repliedAt: "2026-07-11T03:00:00.000Z",
+      labelsJson: JSON.stringify(["keep"]),
+    });
+    const archived = await handleApi(patchRequest("msg_race", { archived: true }), racingArchiveEnv("msg_race"));
+    expect(archived.status).toBe(200);
+    const body = await archived.json() as { data: { state: string; archived_at: string | null } };
+    expect(body.data.state).toBe("processed");
+    expect(body.data.archived_at).toMatch(isoTimestamp);
+    expect(await row("msg_race")).toMatchObject({
+      agent_state: "processed",
+      archived_at: body.data.archived_at,
+      replied_at: "2026-07-11T03:00:00.000Z",
+      labels_json: JSON.stringify(["keep"]),
+    });
+  });
 });
 
 describe("list filter validation", () => {
@@ -318,6 +423,43 @@ describe("list filter validation", () => {
       expect(await response.json(), entry.path).toEqual({ error: { code: "invalid_filter", message: entry.message } });
     }
     expect(await row("msg_open")).toMatchObject({ agent_state: "unprocessed", archived_at: null, replied_at: null });
+  });
+
+  it("returns replied messages for one thread", async () => {
+    await seedMessage({
+      id: "msg_replied",
+      inboxId: "inb_home",
+      threadId: thread,
+      receivedAt: "2026-07-02T00:00:00.000Z",
+      repliedAt: "2026-07-02T03:00:00.000Z",
+    });
+    await seedMessage({
+      id: "msg_waiting",
+      inboxId: "inb_home",
+      threadId: thread,
+      receivedAt: "2026-07-03T00:00:00.000Z",
+    });
+    await seedMessage({
+      id: "msg_other_replied",
+      inboxId: "inb_home",
+      threadId: "msg_other_thread",
+      receivedAt: "2026-07-04T00:00:00.000Z",
+      repliedAt: "2026-07-04T01:00:00.000Z",
+    });
+    await seedMessage({
+      id: "msg_outbound_reply",
+      inboxId: "inb_home",
+      threadId: thread,
+      receivedAt: "2026-07-01T00:00:00.000Z",
+      direction: "outbound",
+      repliedAt: "2026-07-01T02:00:00.000Z",
+    });
+
+    const response = await handleApi(readRequest(`/v1/messages?replied=true&thread_id=${thread}&order=asc`), workerEnv);
+    expect(response.status).toBe(200);
+    const body = await response.json() as { data: Array<{ id: string; replied_at: string | null }> };
+    expect(body.data.map((message) => message.id)).toEqual(["msg_replied"]);
+    expect(body.data[0]?.replied_at).toBe("2026-07-02T03:00:00.000Z");
   });
 });
 
@@ -384,11 +526,16 @@ describe("migration ordering", () => {
     });
 
     const archivedFilter = await handleApi(readRequest("/v1/messages?archived=false"), executionEnv);
-    expect(archivedFilter.status).toBe(500);
-    expect(await archivedFilter.json()).toEqual({ error: { code: "internal_error", message: "Internal server error" } });
+    expect(archivedFilter.status).toBe(503);
+    expect(await archivedFilter.json()).toEqual({
+      error: { code: "migration_pending", message: "archived_at requires migration 0005" },
+    });
 
     const archivedWrite = await handleApi(patchRequest("msg_legacy_code", { archived: true }), executionEnv);
-    expect(archivedWrite.status).toBe(500);
+    expect(archivedWrite.status).toBe(503);
+    expect(await archivedWrite.json()).toEqual({
+      error: { code: "migration_pending", message: "archived_at requires migration 0005" },
+    });
     expect(await row("msg_legacy_code")).toMatchObject({
       agent_state: "processed",
       replied_at: "2026-07-11T03:00:00.000Z",
@@ -431,6 +578,50 @@ function recordingEnv(prepared: Array<{ sql: string; bindings: unknown[] }>): En
   } as Env;
 }
 
+function missingColumnError(): Error {
+  return new Error("D1_ERROR: no such column: archived_at: SQLITE_ERROR");
+}
+
+function racingArchiveEnv(messageId: string): Env {
+  const database = env.DB;
+  return {
+    ...workerEnv,
+    DB: {
+      prepare(sql: string) {
+        const statement = database.prepare(sql);
+        const races = /\bUPDATE\b/i.test(sql) && /\barchived_at\b/i.test(sql);
+        return {
+          bind(...values: unknown[]) {
+            const bound = statement.bind(...values);
+            if (!races) return bound;
+            const interfere = async () => {
+              await database.prepare(
+                "UPDATE messages SET agent_state = 'processed' WHERE id = ?",
+              ).bind(messageId).run();
+            };
+            return {
+              async all() {
+                await interfere();
+                return bound.all();
+              },
+              async run() {
+                await interfere();
+                return bound.run();
+              },
+              async first() {
+                await interfere();
+                return bound.first();
+              },
+            };
+          },
+        };
+      },
+      batch: (statements: D1PreparedStatement[]) => database.batch(statements),
+      exec: database.exec.bind(database),
+    },
+  } as Env;
+}
+
 function missingArchivedColumnEnv(): Env {
   const database = env.DB;
   return {
@@ -443,13 +634,13 @@ function missingArchivedColumnEnv(): Env {
               return rejected;
             },
             async all(): Promise<never> {
-              throw new Error("no such column: archived_at");
+              throw missingColumnError();
             },
             async first(): Promise<never> {
-              throw new Error("no such column: archived_at");
+              throw missingColumnError();
             },
             async run(): Promise<never> {
-              throw new Error("no such column: archived_at");
+              throw missingColumnError();
             },
           };
           return rejected;

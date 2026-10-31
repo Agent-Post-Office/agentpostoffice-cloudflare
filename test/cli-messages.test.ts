@@ -1,6 +1,11 @@
+import { spawn } from "node:child_process";
+import { mkdtemp, rm, symlink } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { runCli } from "../packages/cli/src/index.js";
+import { runCli } from "../packages/cli/src/cli.js";
 
 describe("message list CLI filters", () => {
   it("maps --unanswered, --thread, and archive flags onto the list request", async () => {
@@ -72,7 +77,48 @@ describe("message list CLI filters", () => {
       ]);
     });
   });
+
+  it("prints help when the bin path is a symlink", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "apo-cli-"));
+    const link = join(directory, "agentpostoffice");
+    const entry = fileURLToPath(new URL("../packages/cli/src/index.ts", import.meta.url));
+    await symlink(entry, link);
+    try {
+      const result = await runLinkedBin(link, ["help"]);
+      expect(result.code).toBe(0);
+      expect(result.stdout).toContain("Agent Post Office CLI");
+      expect(result.stdout).toContain("--unanswered");
+      expect(result.stderr).toBe("");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
 });
+
+function runLinkedBin(bin: string, args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+  const root = fileURLToPath(new URL("..", import.meta.url));
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ["--import", "tsx", bin, ...args], { cwd: root });
+    let stdout = "";
+    let stderr = "";
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new Error("symlinked CLI timed out"));
+    }, 15_000);
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => { stdout += chunk; });
+    child.stderr.on("data", (chunk: string) => { stderr += chunk; });
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      resolve({ code: code ?? 1, stdout, stderr });
+    });
+  });
+}
 
 async function invoke(url: string, args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
   const previousUrl = process.env.AGENTPOSTOFFICE_URL;

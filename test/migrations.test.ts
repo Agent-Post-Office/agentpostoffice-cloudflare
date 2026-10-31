@@ -18,7 +18,7 @@ describe("archive and thread-list migrations", () => {
     expect(column).not.toMatch(/\b(UPDATE|NOT NULL|DEFAULT)\b/i);
 
     const index = statements("packages/worker/migrations/0006_message_thread_feed.sql");
-    expect(index).toMatch(/^CREATE INDEX messages_thread_feed_idx ON messages \(thread_id,.*received_at, id\);$/);
+    expect(index).toMatch(/^CREATE INDEX IF NOT EXISTS messages_thread_feed_idx ON messages \(thread_id,.*received_at, id\);$/);
     expect(index).not.toMatch(/\b(UPDATE|ALTER TABLE|INDEXED BY)\b/i);
   });
 
@@ -27,7 +27,8 @@ describe("archive and thread-list migrations", () => {
     const readme = readFileSync("README.md", "utf8");
     expect(upgrading).toContain("0005_message_archived.sql");
     expect(upgrading).toContain("0006_message_thread_feed.sql");
-    expect(upgrading).toMatch(/HTTP 500/);
+    expect(upgrading).toMatch(/HTTP 503/);
+    expect(upgrading).toContain("migration_pending");
     expect(upgrading).toContain("archived_at");
     expect(readme).toContain("thread_id");
     expect(readme).toContain("exact match");
