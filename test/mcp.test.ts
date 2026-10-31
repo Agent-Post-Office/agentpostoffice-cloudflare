@@ -461,16 +461,36 @@ describe("shared MCP catalog", () => {
     }
   });
 
-  it("documents the per-instance remote MCP URL, bearer header, and small remote scopes", async () => {
+  it("documents remote MCP on the operator Worker with exact limits", async () => {
     const readme = await readFile("README.md", "utf8");
-    expect(readme).toContain("https://<your-worker>/mcp");
-    expect(readme).toContain("Authorization");
-    expect(readme).toContain("Bearer apo_<key-id>_<secret>");
-    expect(readme).toContain("smallest scopes");
-    expect(readme).toContain("prompt injection");
+    const remoteStart = readme.indexOf("## Remote MCP");
+    const remoteEnd = readme.indexOf("## Production status");
+    expect(remoteStart).toBeGreaterThanOrEqual(0);
+    expect(remoteEnd).toBeGreaterThan(remoteStart);
+    const remote = readme.slice(remoteStart, remoteEnd);
+    expect(remote).toContain("https://<your-worker>/mcp");
+    expect(remote).toContain("Authorization: Bearer apo_<key_id>_<secret>");
+    expect(remote).toContain("1200000");
+    expect(remote).toContain("1048576");
+    expect(remote).toContain("131072");
+    expect(remote).toContain("10485760");
+    const bannedWords = ["oauth", "hosted plugin", ["agent", "mail"].join(""), "\u2014"].join("|");
+    expect(remote).not.toMatch(new RegExp(bannedWords, "i"));
     const upgrading = await readFile("docs/UPGRADING.md", "utf8");
     expect(upgrading).toContain("1048576");
     expect(upgrading).toContain("stdio");
+  });
+
+  it("keeps the remote MCP key snippets identical", async () => {
+    const bashBlocks = (text: string) => [...text.matchAll(/```bash\n([\s\S]*?)```/g)].map((match) => match[1]);
+    const readme = bashBlocks(await readFile("README.md", "utf8")).filter((block) => block.includes("mcp-remote"));
+    const install = bashBlocks(await readFile("docs/INSTALL-REFERENCE.md", "utf8")).filter((block) => block.includes("mcp-remote"));
+    expect(readme).toHaveLength(1);
+    expect(install).toHaveLength(1);
+    expect(readme[0]).toBe(install[0]);
+    expect(readme[0]).toContain("D1 insert failed; no token file written");
+    expect(readme[0]).not.toContain("printf '%s\\n'");
+    expect(readme[0]).toContain("printf '%s' \"$APO_TOKEN\" > \"$APO_MCP_TOKEN_FILE\"");
   });
 
   it("imports the MCP handler only when the request targets /mcp", async () => {

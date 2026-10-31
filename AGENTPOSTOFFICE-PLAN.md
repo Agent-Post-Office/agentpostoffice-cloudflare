@@ -2,7 +2,7 @@
 
 Status: the local Phase 1 monorepo implementation is complete and covered by unit plus workerd integration tests. A Worker deployment exists under the earlier technical identifier, but mandatory live Cloudflare Phase 0 proof has not completed; the system is not production-validated.
 
-Product name: **Agent Post Office**. Do not ship under **AgentMail**, which is the existing product and brand used as a reference.
+Product name: **Agent Post Office**. Use that name in the product, the repository, and operator-facing text.
 
 ## 1. Product goal
 
@@ -151,7 +151,7 @@ Raw email is always written before enqueue. Queue payloads never contain MIME be
 Agent Post Office tokens use this format:
 
 ```text
-apo_<key-id>_<32-byte-random-secret>
+apo_<key_id>_<secret>
 ```
 
 Authentication works as follows:
@@ -291,7 +291,7 @@ After the Email Sending binding succeeds, Agent Post Office records `accepted` a
 
 ## 10. CLI and MCP behavior
 
-The REST API is the source of truth. The MVP CLI and MCP server wrap its operations; neither duplicates business logic nor writes token rows.
+The REST API is the source of truth. The MVP CLI and the local stdio MCP server wrap its operations. The Worker also serves the shared tools at `POST /mcp` by calling those handlers in-process. None of these surfaces write token rows.
 
 The CLI provides:
 
@@ -305,7 +305,7 @@ MCP exposes the same API operations as bounded typed tools. Every message body i
 
 The CLI saves downloaded attachments without opening or executing them. Agent Post Office does not scan attachments for malware and must not claim that it does.
 
-The single default token may be used by CLI and MCP. Additional narrower tokens are optional, not a default installation requirement. CLI/MCP confirmations are guardrails rather than a hard security boundary when the same agent also has arbitrary shell access and the full token.
+The single default token may be used by CLI and MCP. Additional narrower tokens are optional, not a default installation requirement. Narrow tokens are recommended for remote MCP clients. CLI/MCP confirmations are guardrails rather than a hard security boundary when the same agent also has arbitrary shell access and the full token.
 
 ## 11. Data model and storage
 
@@ -392,7 +392,7 @@ Run and document the fourteen mandatory gates above in a temporary domain or sub
 
 ### Deferred or explicitly out of MVP
 
-- Historical AgentMail or other-provider import.
+- Historical mailbox import from another provider.
 - Multiple domains, multiple tenants, or mutually untrusted users in one deployment.
 - Claims/leases for concurrent consumers.
 - Scheduled repair of stale ingestion, parsing, or deletion states.
@@ -421,9 +421,7 @@ Run and document the fourteen mandatory gates above in a temporary domain or sub
 
 ## Sources
 
-- [AgentMail inbox capabilities](https://docs.agentmail.to/knowledge-base/inbox-capabilities)
-- [AgentMail messages](https://docs.agentmail.to/messages.md)
-- [AgentMail custom domains](https://docs.agentmail.to/custom-domains.md)
+- Inbox, message, and custom-domain notes from other hosted mailbox products.
 - [Cloudflare Email Service](https://developers.cloudflare.com/email-service/)
 - [Cloudflare inbound email Worker API](https://developers.cloudflare.com/email-service/api/route-emails/email-handler/)
 - [Cloudflare email storage and Queue example](https://developers.cloudflare.com/email-service/examples/email-routing/email-storage/)
