@@ -38,6 +38,45 @@ describe("Agent Post Office MCP contract", () => {
     await server.close();
   });
 
+  it("forwards thread and archive filters when polling", async () => {
+    const listMessages = vi.fn(async () => ({ data: [], next_cursor: null }));
+    const fakeClient = { listMessages } as unknown as AgentPostOfficeClient;
+    const server = createAgentPostOfficeMcpServer(fakeClient);
+    const client = new Client({ name: "test", version: "1.0.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    const result = await client.callTool({
+      name: "poll_messages",
+      arguments: { thread_id: "msg_thread_root", archived: "false", replied: "false", state: "unprocessed" },
+    });
+    expect(result.isError).not.toBe(true);
+    expect(listMessages).toHaveBeenCalledWith(expect.objectContaining({
+      threadId: "msg_thread_root",
+      archived: false,
+      replied: false,
+      state: "unprocessed",
+    }));
+    await client.close();
+    await server.close();
+  });
+
+  it("archives through messages:update without sending processed state", async () => {
+    const updateMessage = vi.fn(async () => ({ id: "msg_1", archived_at: "2026-07-11T00:00:00.000Z" }));
+    const fakeClient = { updateMessage } as unknown as AgentPostOfficeClient;
+    const server = createAgentPostOfficeMcpServer(fakeClient);
+    const client = new Client({ name: "test", version: "1.0.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    const result = await client.callTool({
+      name: "set_message_archived",
+      arguments: { message_id: "msg_1", archived: true },
+    });
+    expect(result.isError).not.toBe(true);
+    expect(updateMessage).toHaveBeenCalledWith("msg_1", { archived: true });
+    await client.close();
+    await server.close();
+  });
+
   it("rejects an absolute download path outside the configured directory", async () => {
     const temporary = await mkdtemp(join(tmpdir(), "agentpostoffice-mcp-"));
     const downloadDirectory = join(temporary, "downloads");

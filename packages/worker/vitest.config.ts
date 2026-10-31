@@ -18,6 +18,7 @@ export default defineConfig({
   ],
   test: {
     include: ["packages/worker/test/**/*.test.ts"],
+    exclude: ["**/node_modules/**", "**/.git/**", "packages/worker/test/pre-0005.test.ts"],
     setupFiles: ["packages/worker/test/setup.ts"],
   },
 });

@@ -333,6 +333,29 @@ curl -sS -X PATCH https://agentpostoffice.example.workers.dev/v1/messages/msg_12
   --data '{"state":"processed"}'
 ```
 
+List filters combine. `thread_id` is an exact match on the stored thread id. The caller can read every inbox in this single-operator deployment; pass `inbox_id` to keep the thread inside one mailbox. A thread id that exists only in another inbox is omitted. Rows whose `thread_id` is still NULL, including legacy roots from before thread links were stored, are not returned by that filter. `replied=true|false` selects inbound messages with or without an accepted reply and is rejected with `direction=outbound`. `archived=true|false` selects messages with or without an archive timestamp. Archived messages stay in the default feed when `archived` is omitted, so existing polls keep seeing them.
+
+Archive is separate from processed state and from `replied_at`. The same `messages:update` PATCH accepts `archived: true` or `archived: false`:
+
+```bash
+curl -sS -X PATCH https://agentpostoffice.example.workers.dev/v1/messages/msg_123 \
+  -H "Authorization: Bearer $AGENTPOSTOFFICE_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{"archived":true}'
+```
+
+`archived: true` sets `archived_at` when it is empty and leaves an existing timestamp in place. `archived: false` clears it. Neither changes `state` or `replied_at`.
+
+```bash
+node packages/cli/dist/index.js messages list --unanswered --thread <thread-id> --inbox <inbox-id>
+node packages/cli/dist/index.js messages list --archived
+node packages/cli/dist/index.js messages list --unarchived
+node packages/cli/dist/index.js messages archive <message-id>
+node packages/cli/dist/index.js messages unarchive <message-id>
+```
+
+`--unanswered` is an alias for `replied=false`. The CLI rejects it with `--direction outbound` before the request, matching the API's `400 invalid_filter` response.
+
 Send and reply requests require an `Idempotency-Key`. Reusing the key with different content returns a conflict; once an attempt begins, that key never sends again.
 
 ## MCP

@@ -44,6 +44,7 @@ export interface Message {
   sent_at: string | null;
   replied_at: string | null;
   last_reply_message_id: string | null;
+  archived_at: string | null;
   from: { address: string };
   to: { address: string };
   subject: string | null;
@@ -67,6 +68,8 @@ export interface ListMessageOptions {
   state?: "processed" | "unprocessed";
   direction?: "inbound" | "outbound";
   replied?: boolean;
+  threadId?: string;
+  archived?: boolean;
   since?: string;
   until?: string;
   order?: "asc" | "desc";
@@ -168,6 +171,8 @@ export class AgentPostOfficeClient {
     if (options.state) query.set("state", options.state);
     if (options.direction) query.set("direction", options.direction);
     if (options.replied !== undefined) query.set("replied", options.replied ? "true" : "false");
+    if (options.threadId) query.set("thread_id", options.threadId);
+    if (options.archived !== undefined) query.set("archived", options.archived ? "true" : "false");
     if (options.since) query.set("since", options.since);
     if (options.until) query.set("until", options.until);
     if (options.order) query.set("order", options.order);
@@ -182,7 +187,7 @@ export class AgentPostOfficeClient {
     return (await this.request<{ data: Message }>(`/v1/messages/${encodeURIComponent(id)}${suffix}`)).data;
   }
 
-  async updateMessage(id: string, update: { state?: "processed" | "unprocessed"; labels?: string[] }): Promise<unknown> {
+  async updateMessage(id: string, update: { state?: "processed" | "unprocessed"; labels?: string[]; archived?: boolean }): Promise<unknown> {
     return (await this.request<{ data: unknown }>(`/v1/messages/${encodeURIComponent(id)}`, {
       method: "PATCH",
       body: JSON.stringify(update),

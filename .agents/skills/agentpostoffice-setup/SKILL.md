@@ -37,3 +37,5 @@ Inspect the generated Wrangler config and live resource lists before running cre
 ## Upgrading multiple instances
 
 Use the ignored registry and one named Wrangler config per instance from `docs/UPGRADING.md`. Run the release preflight once, then upgrade instances serially. Verify identity, bindings, migration mode, dry run, deployment, health, and read-only authenticated smoke checks for one instance before touching the next. Stop the fleet rollout on any failure. Never store credentials or mail data in the registry, and never assume Worker rollback reverses D1.
+
+`0005_message_archived.sql` adds nullable `archived_at` with no backfill, and `0006_message_thread_feed.sql` adds the thread-list index. Apply `0005` before archive filters. The default message feed still works if the Worker is deployed first; `archived` filters and archive updates return HTTP 503 `migration_pending` until `0005` is applied.
