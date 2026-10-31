@@ -298,6 +298,61 @@ describe("remote MCP over HTTPS", () => {
     expect(body.error?.code).toBe(-32000);
   });
 
+  it("accepts the documented initialize and tools/list requests", async () => {
+    await insertKey(readKeyId, readToken, ["messages:read"]);
+    const headers = {
+      Authorization: `Bearer ${readToken}`,
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+    };
+    const initialize = await handleApi(new Request("https://worker.example/mcp", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: "curl", version: "1.0.0" },
+        },
+      }),
+    }), workerEnv);
+    expect(initialize.status).toBe(200);
+    expect(initialize.headers.get("mcp-session-id")).toBeNull();
+    const initialized = await initialize.json() as { result?: { protocolVersion?: string; serverInfo?: { name: string } } };
+    expect(initialized.result?.protocolVersion).toBe("2025-11-25");
+    expect(initialized.result?.serverInfo?.name).toBe("agentpostoffice");
+
+    const listed = await handleApi(new Request("https://worker.example/mcp", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }),
+    }), workerEnv);
+    expect(listed.status).toBe(200);
+    const tools = await listed.json() as { result?: { tools?: Array<{ name: string }> } };
+    const names = (tools.result?.tools ?? []).map((tool) => tool.name);
+    expect(names).toContain("list_inboxes");
+    expect(names).not.toContain("send_message");
+    expect(names).not.toContain("save_raw_message");
+    expect(names).not.toContain("save_attachment");
+
+    const versioned = await handleApi(new Request("https://worker.example/mcp", {
+      method: "POST",
+      headers: { ...headers, "MCP-Protocol-Version": "2025-11-25" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/list", params: {} }),
+    }), workerEnv);
+    expect(versioned.status).toBe(200);
+
+    const unsupported = await handleApi(new Request("https://worker.example/mcp", {
+      method: "POST",
+      headers: { ...headers, "MCP-Protocol-Version": "1999-01-01" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 4, method: "tools/list", params: {} }),
+    }), workerEnv);
+    expect(unsupported.status).toBe(400);
+  });
+
   it("lists the full HTTP tool set for a token that holds every scope", async () => {
     await insertKey(fullKeyId, fullToken, sharedTools.map((tool) => tool.scope).filter((scope, index, all) => all.indexOf(scope) === index));
     const listed = await rpc(fullToken, "tools/list", {});

@@ -358,9 +358,27 @@ node packages/cli/dist/index.js messages unarchive <message-id>
 
 Send and reply requests require an `Idempotency-Key`. Reusing the key with different content returns a conflict; once an attempt begins, that key never sends again.
 
-## MCP
+## Remote MCP
 
-Each self-hosted install is its own Worker. A client that can only take an MCP URL and a header connects to that Worker directly. There is no central Agent Post Office service. Use the same bearer key the REST API accepts:
+`POST /mcp` is served by the same Worker you already deploy in your Cloudflare account. There is no separate service and no extra infrastructure. Deploy that Worker and apply its D1 migrations. The endpoint is included. It does not add a migration of its own. Each install has its own URL. There is no central Agent Post Office service and no hosted connector.
+
+Authentication is a bearer token in the form `apo_<key_id>_<secret>`. The key id is 6 to 64 characters from `A-Z`, `a-z`, `0-9`, and `-`. The secret is 40 to 64 characters from `A-Z`, `a-z`, `0-9`, `_`, and `-`. That is the same token the REST API accepts. Do not put it in the URL or in logs.
+
+`tools/list` returns only the tools whose scope that key holds. A tool outside those scopes is disabled, and calling it does not run. Give a remote client the least privilege it needs. Start with `messages:read`. Add `messages:update`, `messages:reply`, or `messages:send` only when that client must acknowledge or archive, reply, or send. A remote client is more exposed to prompt injection from mail than a process on your machine. The other scopes are `messages:delete`, `inboxes:manage`, `sieve:read`, and `sieve:manage`.
+
+The CLI does not create keys. Create one with the Wrangler D1 insert in [Create an application token](./docs/INSTALL-REFERENCE.md#5-deploy-migrate-and-create-an-application-token). For this client, set:
+
+```bash
+APO_SCOPES='["messages:read"]'
+```
+
+The insert stores the SHA-256 digest and that scopes JSON. It must not contain the raw token. The local CLI only stores a token that already exists:
+
+```bash
+node packages/cli/dist/index.js config set --url https://<your-worker> --token-stdin
+```
+
+A remote client does not need that command. Put the token in the header below.
 
 ```json
 {
@@ -368,27 +386,53 @@ Each self-hosted install is its own Worker. A client that can only take an MCP U
     "agentpostoffice": {
       "url": "https://<your-worker>/mcp",
       "headers": {
-        "Authorization": "Bearer apo_<key-id>_<secret>"
+        "Authorization": "Bearer apo_<key_id>_<secret>"
       }
     }
   }
 }
 ```
 
-`POST /mcp` speaks stateless MCP Streamable HTTP. `GET` and `DELETE` return `405`. The token is the `Authorization` header only; do not put it in the URL or in logs. `tools/list` returns the tools that token's scopes allow. A tool outside those scopes is disabled, and calling it does not run. Give a remote HTTP `/mcp` key the smallest scopes it needs, such as `messages:read` or `messages:read` plus `messages:reply`. A remote client is more exposed to prompt injection from mail. Requests are authenticated with the same key lookup as `/v1`, and this endpoint does not add a separate application rate limit. Browser CORS is not enabled: the clients for this endpoint send the bearer header from their own process. The POST body is limited to 1200000 bytes. JSON-RPC batches are rejected. A tool result larger than 1048576 bytes is refused on both this endpoint and the local stdio server.
+`POST` is the only method. Any other method returns `405` with `Allow: POST`. The body must be a single JSON-RPC object. `Content-Type` must be `application/json`. `Accept` must include both `application/json` and `text/event-stream`. `MCP-Protocol-Version` is optional. If you send it, the value must be `2025-11-25`, `2025-06-18`, `2025-03-26`, `2024-11-05`, or `2024-10-07`. The server is stateless: it does not issue `Mcp-Session-Id`, and `tools/list` does not depend on an earlier `initialize` on the same connection.
 
-`get_attachment` returns one attachment as base64 after checking its stored size and SHA-256 checksum. Attachments larger than 131072 bytes are refused. The bytes are untrusted. The caller must pass `acknowledge_untrusted_bytes: true`.
+```bash
+curl -sS -X POST "https://<your-worker>/mcp" \
+  -H "Authorization: Bearer apo_<key_id>_<secret>" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"curl","version":"1.0.0"}}}'
 
-The local stdio server remains available for a process on the same machine. It adds `save_raw_message` and `save_attachment`, which the HTTPS endpoint does not expose:
+curl -sS -X POST "https://<your-worker>/mcp" \
+  -H "Authorization: Bearer apo_<key_id>_<secret>" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  --data '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+```
+
+A JSON array body is a JSON-RPC batch and is rejected with HTTP 400. A body larger than 1200000 bytes is rejected with HTTP 413. A tool result larger than 1048576 bytes is refused as `output_too_large` and does not include the payload. That output cap also applies to the local stdio server. There is no separate application rate limit and no browser CORS on `/mcp`.
+
+Message output is labeled `untrusted_content: true`. `get_attachment` returns one attachment as base64 after checking its stored size and SHA-256 checksum. The caller must pass `acknowledge_untrusted_bytes: true`. Attachments larger than 131072 bytes are refused. `get_message_html` requires `acknowledge_untrusted_html: true`. `activate_sieve_revision`, `disable_sieve`, `delete_message`, and `delete_messages` require `confirmed: true`. `send_message` and `reply_to_message` do not. They require `messages:send` or `messages:reply` and an idempotency key.
+
+| Tool | Scope |
+| --- | --- |
+| `list_inboxes` | `messages:read` |
+| `poll_messages`, `get_message`, `get_message_html`, `get_attachment_metadata`, `get_attachment` | `messages:read` |
+| `acknowledge_message`, `set_message_archived` | `messages:update` |
+| `reply_to_message` | `messages:reply` |
+| `send_message` | `messages:send` |
+| `delete_message`, `delete_messages` | `messages:delete` |
+| `create_inbox`, `set_inbox_active` | `inboxes:manage` |
+| `list_sieve_scripts`, `validate_sieve_script`, `test_sieve_revision` | `sieve:read` |
+| `store_sieve_revision`, `activate_sieve_revision`, `disable_sieve` | `sieve:manage` |
+
+The local stdio server is still available for a process on the same machine. It exposes the table above plus `save_raw_message` and `save_attachment`, which `POST /mcp` does not. Those two tools require `confirmed: true`, accept only a filename, and create a new `0600` file inside `AGENTPOSTOFFICE_DOWNLOAD_DIR`. They never open the saved bytes. The download directory defaults to `~/Downloads/agentpostoffice`. The bytes they write are capped at 10485760 bytes.
 
 ```bash
 AGENTPOSTOFFICE_URL=https://<your-worker> \
-AGENTPOSTOFFICE_TOKEN='apo_<key-id>_<secret>' \
+AGENTPOSTOFFICE_TOKEN='apo_<key_id>_<secret>' \
 AGENTPOSTOFFICE_DOWNLOAD_DIR="$HOME/Downloads/agentpostoffice" \
 node packages/mcp/dist/index.js
 ```
-
-MCP message output is labeled `untrusted_content: true`. Attachment metadata can be inspected without downloading. The explicit save tools require `confirmed: true`, accept only a filename, and create a new `0600` file inside `AGENTPOSTOFFICE_DOWNLOAD_DIR`; they never open the saved bytes. Before creating an attachment file, MCP verifies the downloaded byte length and SHA-256 checksum against stored metadata. The download directory defaults to `~/Downloads/agentpostoffice`. Delete, Sieve activation, and Sieve disable also require `confirmed: true`. Send and reply require their scopes and an idempotency key.
 
 ## Production status
 

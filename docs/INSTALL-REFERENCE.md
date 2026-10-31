@@ -300,15 +300,27 @@ An actual test email requires explicit operator approval. Reusing an idempotency
 
 ## 8. Configure MCP
 
-Provide credentials through the MCP process environment:
+### Remote HTTP
+
+`POST /mcp` is part of the Worker deployed above. No second service is required. Point a client at `https://<your-worker>/mcp` with `Authorization: Bearer apo_<key_id>_<secret>`. The header is the only credential. Create that key with the section 5 insert, and prefer a least-privilege scope list such as `APO_SCOPES='["messages:read"]'`. Add `messages:update`, `messages:reply`, or `messages:send` only when that client needs them. The [README Remote MCP section](../README.md#remote-mcp) lists every tool, the required `Accept` header, and the body and output limits.
+
+`config set` does not create a key. It stores an existing token for the local CLI:
+
+```bash
+node packages/cli/dist/index.js config set --url https://<your-worker> --token-stdin
+```
+
+### Local stdio
+
+A process on the same machine can still use the stdio server. It adds `save_raw_message` and `save_attachment`, which `POST /mcp` does not expose. Provide credentials through the process environment:
 
 ```json
 {
   "command": "node",
   "args": ["/absolute/path/to/agentpostoffice/packages/mcp/dist/index.js"],
   "env": {
-    "AGENTPOSTOFFICE_URL": "https://<worker-url>",
-    "AGENTPOSTOFFICE_TOKEN": "apo_<key-id>_<secret>",
+    "AGENTPOSTOFFICE_URL": "https://<your-worker>",
+    "AGENTPOSTOFFICE_TOKEN": "apo_<key_id>_<secret>",
     "AGENTPOSTOFFICE_DOWNLOAD_DIR": "/absolute/path/to/a/dedicated/download-directory"
   }
 }

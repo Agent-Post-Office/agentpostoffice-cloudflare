@@ -291,7 +291,7 @@ After the Email Sending binding succeeds, Agent Post Office records `accepted` a
 
 ## 10. CLI and MCP behavior
 
-The REST API is the source of truth. The MVP CLI and MCP server wrap its operations; neither duplicates business logic nor writes token rows.
+The REST API is the source of truth. The MVP CLI and the local stdio MCP server wrap its operations. The Worker also serves the shared tools at `POST /mcp` by calling those handlers in-process. None of these surfaces write token rows.
 
 The CLI provides:
 

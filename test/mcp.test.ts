@@ -461,13 +461,28 @@ describe("shared MCP catalog", () => {
     }
   });
 
-  it("documents the per-instance remote MCP URL, bearer header, and small remote scopes", async () => {
+  it("documents remote MCP on the operator Worker with exact limits", async () => {
     const readme = await readFile("README.md", "utf8");
+    expect(readme).toContain("## Remote MCP");
     expect(readme).toContain("https://<your-worker>/mcp");
-    expect(readme).toContain("Authorization");
-    expect(readme).toContain("Bearer apo_<key-id>_<secret>");
-    expect(readme).toContain("smallest scopes");
-    expect(readme).toContain("prompt injection");
+    expect(readme).toContain("Authorization: Bearer apo_<key_id>_<secret>");
+    expect(readme).toContain("Accept: application/json, text/event-stream");
+    expect(readme).toContain("messages:read");
+    expect(readme).toContain("messages:update");
+    expect(readme).toContain("messages:reply");
+    expect(readme).toContain("messages:send");
+    expect(readme).toContain("1200000");
+    expect(readme).toContain("1048576");
+    expect(readme).toContain("131072");
+    expect(readme).toContain("10485760");
+    expect(readme).toContain("acknowledge_untrusted_bytes");
+    expect(readme).toContain("save_raw_message");
+    expect(readme).toContain("save_attachment");
+    expect(readme).toContain("config set --url");
+    expect(readme).toContain("--token-stdin");
+    const remote = readme.slice(readme.indexOf("## Remote MCP"), readme.indexOf("## Production status"));
+    expect(remote.length).toBeGreaterThan(200);
+    expect(remote).not.toMatch(/OAuth|hosted plugin|AgentMail|\u2014/);
     const upgrading = await readFile("docs/UPGRADING.md", "utf8");
     expect(upgrading).toContain("1048576");
     expect(upgrading).toContain("stdio");
