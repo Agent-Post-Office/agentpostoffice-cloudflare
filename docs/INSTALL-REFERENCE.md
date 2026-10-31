@@ -88,7 +88,7 @@ Review the generated binding names and domain before continuing.
 
 ## 4. Prepare outbound sending
 
-Do not activate Email Sending yet. Confirm that the account has Workers Paid, then continue through Path A or Path B after the Worker and intended mailboxes exist. Display every DNS record Cloudflare proposes before applying it. Workers Paid arbitrary-recipient sending and real SPF, DKIM, and DMARC passage are mandatory proof gates—not assumptions.
+Do not activate Email Sending yet. Confirm that the account has Workers Paid, then continue through Path A or Path B after the Worker and intended mailboxes exist. Display every DNS record Cloudflare proposes before applying it. Workers Paid arbitrary-recipient sending and real SPF, DKIM, and DMARC passage are mandatory proof gates, not assumptions.
 
 The Worker binding is named `EMAIL`. It is unrestricted by destination because agents send transactional mail to arbitrary recipients; application code restricts `From` to active D1 inboxes on `MAIL_DOMAIN`.
 
@@ -302,13 +302,62 @@ An actual test email requires explicit operator approval. Reusing an idempotency
 
 ### Remote HTTP
 
-`POST /mcp` is part of the Worker deployed above. No second service is required. Point a client at `https://<your-worker>/mcp` with `Authorization: Bearer apo_<key_id>_<secret>`. The header is the only credential. Create that key with the section 5 insert, and prefer a least-privilege scope list such as `APO_SCOPES='["messages:read"]'`. Add `messages:update`, `messages:reply`, or `messages:send` only when that client needs them. The [README Remote MCP section](../README.md#remote-mcp) lists every tool, the required `Accept` header, and the body and output limits.
+`POST /mcp` is part of the Worker deployed above. No second service is required. Point a client at `https://<your-worker>/mcp` with `Authorization: Bearer apo_<key_id>_<secret>`. The header is the only credential. Add `messages:update`, `messages:reply`, or `messages:send` to `APO_SCOPES` only when that client needs them. The [README Remote MCP section](../README.md#remote-mcp) lists every tool, the required `Accept` header, and the body and output limits.
 
-`config set` does not create a key. It stores an existing token for the local CLI:
+#### Create a remote MCP key
+
+This script uses the same local generate, digest, and D1 insert steps as section 5. The label is `mcp-remote`. `APO_SCOPES` defaults to `["messages:read"]`. Export a different JSON array first when this client needs more scopes. It does not call `config set`. It writes the raw token to a new file and does not print it. `umask 077` makes that file mode `0600`. It refuses to replace an existing file or symlink.
+
+Running `node packages/cli/dist/index.js config set --url https://<your-worker> --token-stdin` with this key replaces the CLI token. That command writes the one operating-system keyring entry for service `agentpostoffice`, account `default`.
+
+The section 5 revoke snippet expects the 16-character lowercase hex key id that `randomBytes(8).toString("hex")` generates here. Take that id from the `mcp-remote` row of the metadata query above. The revoke check is `^[a-f0-9]{16}$`.
 
 ```bash
-node packages/cli/dist/index.js config set --url https://<your-worker> --token-stdin
+set +x
+APO_SAVED_UMASK="$(umask)"
+umask 077
+APO_MCP_TOKEN_FILE="${APO_MCP_TOKEN_FILE:-$HOME/.config/agentpostoffice/mcp-remote-token}"
+if [[ -e "$APO_MCP_TOKEN_FILE" || -L "$APO_MCP_TOKEN_FILE" ]]; then
+  echo 'Refusing to overwrite an existing remote MCP token file' >&2
+else
+  APO_TOKEN="$(node --input-type=module -e '
+    import { randomBytes } from "node:crypto";
+    const keyId = randomBytes(8).toString("hex");
+    const secret = randomBytes(32).toString("base64url");
+    process.stdout.write(`apo_${keyId}_${secret}`);
+  ')"
+  APO_KEY_ID="${APO_TOKEN#apo_}"
+  APO_KEY_ID="${APO_KEY_ID%%_*}"
+  APO_DIGEST="$(
+    printf '%s' "$APO_TOKEN" |
+    node --input-type=module -e '
+      import { createHash } from "node:crypto";
+      const chunks = [];
+      for await (const chunk of process.stdin) chunks.push(chunk);
+      process.stdout.write(createHash("sha256").update(Buffer.concat(chunks)).digest("hex"));
+    '
+  )"
+  APO_CREATED_AT="$(node -e 'process.stdout.write(new Date().toISOString())')"
+  if [[ -z "${APO_SCOPES:-}" ]]; then
+    APO_SCOPES='["messages:read"]'
+  fi
+
+  npx wrangler d1 execute agentpostoffice --remote \
+    --config packages/worker/wrangler.jsonc \
+    --command "INSERT INTO api_keys (key_id, digest_sha256, label, scopes_json, expires_at, created_at, revoked_at) VALUES ('$APO_KEY_ID', '$APO_DIGEST', 'mcp-remote', '$APO_SCOPES', NULL, '$APO_CREATED_AT', NULL);"
+
+  mkdir -p -- "$(dirname -- "$APO_MCP_TOKEN_FILE")"
+  if (set -o noclobber; printf '%s\n' "$APO_TOKEN" > "$APO_MCP_TOKEN_FILE"); then
+    unset APO_TOKEN APO_KEY_ID APO_DIGEST APO_CREATED_AT APO_SCOPES
+  else
+    echo 'Could not create a new remote MCP token file. APO_TOKEN is still set in this shell. Do not print it.' >&2
+  fi
+fi
+umask "$APO_SAVED_UMASK"
+unset APO_SAVED_UMASK
 ```
+
+The default path is `$HOME/.config/agentpostoffice/mcp-remote-token`. Set `APO_MCP_TOKEN_FILE` to choose another new path. Delete the file after the client has the header value.
 
 ### Local stdio
 

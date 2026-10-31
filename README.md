@@ -366,19 +366,62 @@ Authentication is a bearer token in the form `apo_<key_id>_<secret>`. The key id
 
 `tools/list` returns only the tools whose scope that key holds. A tool outside those scopes is disabled, and calling it does not run. Give a remote client the least privilege it needs. Start with `messages:read`. Add `messages:update`, `messages:reply`, or `messages:send` only when that client must acknowledge or archive, reply, or send. A remote client is more exposed to prompt injection from mail than a process on your machine. The other scopes are `messages:delete`, `inboxes:manage`, `sieve:read`, and `sieve:manage`.
 
-The CLI does not create keys. Create one with the Wrangler D1 insert in [Create an application token](./docs/INSTALL-REFERENCE.md#5-deploy-migrate-and-create-an-application-token). For this client, set:
+The CLI does not create keys. Create this client key with the script below after the Worker and its D1 migrations exist. It uses the same local generate, digest, and D1 insert steps as [Create an application token](./docs/INSTALL-REFERENCE.md#5-deploy-migrate-and-create-an-application-token). The label is `mcp-remote`. `APO_SCOPES` defaults to `["messages:read"]`. Export a different JSON array first when this client also needs `messages:update`, `messages:reply`, or `messages:send`. The insert stores the SHA-256 digest and that scopes JSON. It does not contain the raw token. This script does not call `config set`.
+
+Running `node packages/cli/dist/index.js config set --url https://<your-worker> --token-stdin` with this key replaces the CLI token. That command writes the one operating-system keyring entry for service `agentpostoffice`, account `default`.
+
+### Create a remote MCP key
 
 ```bash
-APO_SCOPES='["messages:read"]'
+set +x
+APO_SAVED_UMASK="$(umask)"
+umask 077
+APO_MCP_TOKEN_FILE="${APO_MCP_TOKEN_FILE:-$HOME/.config/agentpostoffice/mcp-remote-token}"
+if [[ -e "$APO_MCP_TOKEN_FILE" || -L "$APO_MCP_TOKEN_FILE" ]]; then
+  echo 'Refusing to overwrite an existing remote MCP token file' >&2
+else
+  APO_TOKEN="$(node --input-type=module -e '
+    import { randomBytes } from "node:crypto";
+    const keyId = randomBytes(8).toString("hex");
+    const secret = randomBytes(32).toString("base64url");
+    process.stdout.write(`apo_${keyId}_${secret}`);
+  ')"
+  APO_KEY_ID="${APO_TOKEN#apo_}"
+  APO_KEY_ID="${APO_KEY_ID%%_*}"
+  APO_DIGEST="$(
+    printf '%s' "$APO_TOKEN" |
+    node --input-type=module -e '
+      import { createHash } from "node:crypto";
+      const chunks = [];
+      for await (const chunk of process.stdin) chunks.push(chunk);
+      process.stdout.write(createHash("sha256").update(Buffer.concat(chunks)).digest("hex"));
+    '
+  )"
+  APO_CREATED_AT="$(node -e 'process.stdout.write(new Date().toISOString())')"
+  if [[ -z "${APO_SCOPES:-}" ]]; then
+    APO_SCOPES='["messages:read"]'
+  fi
+
+  npx wrangler d1 execute agentpostoffice --remote \
+    --config packages/worker/wrangler.jsonc \
+    --command "INSERT INTO api_keys (key_id, digest_sha256, label, scopes_json, expires_at, created_at, revoked_at) VALUES ('$APO_KEY_ID', '$APO_DIGEST', 'mcp-remote', '$APO_SCOPES', NULL, '$APO_CREATED_AT', NULL);"
+
+  mkdir -p -- "$(dirname -- "$APO_MCP_TOKEN_FILE")"
+  if (set -o noclobber; printf '%s\n' "$APO_TOKEN" > "$APO_MCP_TOKEN_FILE"); then
+    unset APO_TOKEN APO_KEY_ID APO_DIGEST APO_CREATED_AT APO_SCOPES
+  else
+    echo 'Could not create a new remote MCP token file. APO_TOKEN is still set in this shell. Do not print it.' >&2
+  fi
+fi
+umask "$APO_SAVED_UMASK"
+unset APO_SAVED_UMASK
 ```
 
-The insert stores the SHA-256 digest and that scopes JSON. It must not contain the raw token. The local CLI only stores a token that already exists:
+The script writes the raw token to a new file and does not print it. `umask 077` makes that file mode `0600`. It refuses to replace an existing file or symlink. The default path is `$HOME/.config/agentpostoffice/mcp-remote-token`. Set `APO_MCP_TOKEN_FILE` to choose another new path. Delete the file after the client has the header value.
 
-```bash
-node packages/cli/dist/index.js config set --url https://<your-worker> --token-stdin
-```
+The [revoke snippet](./docs/INSTALL-REFERENCE.md#5-deploy-migrate-and-create-an-application-token) expects the 16-character lowercase hex key id that `randomBytes(8).toString("hex")` generates here. Take that id from the `mcp-remote` row of the metadata query. The revoke check is `^[a-f0-9]{16}$`.
 
-A remote client does not need that command. Put the token in the header below.
+Put the token in the header below.
 
 ```json
 {

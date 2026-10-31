@@ -385,7 +385,7 @@ components:
     bearerAuth:
       type: http
       scheme: bearer
-      bearerFormat: apo_<key-id>_<secret>
+      bearerFormat: apo_<key_id>_<secret>
   parameters:
     InboxId: { name: inbox_id, in: path, required: true, schema: { type: string } }
     MessageId: { name: message_id, in: path, required: true, schema: { type: string } }
