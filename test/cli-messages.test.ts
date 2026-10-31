@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { spawn } from "node:child_process";
 import { describe, expect, it } from "vitest";
+import { runCli } from "../packages/cli/src/index.js";
 
 describe("message list CLI filters", () => {
   it("maps --unanswered, --thread, and archive flags onto the list request", async () => {
@@ -10,7 +10,7 @@ describe("message list CLI filters", () => {
       response.setHeader("content-type", "application/json");
       response.end(JSON.stringify({ data: [], next_cursor: null }));
     }, async (url) => {
-      const result = await runCli(url, [
+      const result = await invoke(url, [
         "messages", "list",
         "--unanswered",
         "--thread", "msg_thread_root",
@@ -42,7 +42,7 @@ describe("message list CLI filters", () => {
       response.statusCode = 500;
       response.end("{}");
     }, async (url) => {
-      const result = await runCli(url, ["messages", "list", "--unanswered", "--direction", "outbound"]);
+      const result = await invoke(url, ["messages", "list", "--unanswered", "--direction", "outbound"]);
       expect(result.code).toBe(1);
       expect(result.stderr).toContain("invalid_filter: replied cannot be combined with direction=outbound");
       expect(seen).toEqual([]);
@@ -57,14 +57,14 @@ describe("message list CLI filters", () => {
       response.setHeader("content-type", "application/json");
       response.end(JSON.stringify({ data: { id: "msg_1", archived_at: null } }));
     }, async (url) => {
-      const conflict = await runCli(url, ["messages", "list", "--archived", "--unarchived"]);
+      const conflict = await invoke(url, ["messages", "list", "--archived", "--unarchived"]);
       expect(conflict.code).toBe(1);
       expect(conflict.stderr).toContain("invalid_filter:");
       expect(seen).toEqual([]);
 
-      const archive = await runCli(url, ["messages", "archive", "msg_1"]);
+      const archive = await invoke(url, ["messages", "archive", "msg_1"]);
       expect(archive.code).toBe(0);
-      const clear = await runCli(url, ["messages", "unarchive", "msg_1"]);
+      const clear = await invoke(url, ["messages", "unarchive", "msg_1"]);
       expect(clear.code).toBe(0);
       expect(seen).toEqual([
         { method: "PATCH", url: "/v1/messages/msg_1", body: JSON.stringify({ archived: true }) },
@@ -74,25 +74,34 @@ describe("message list CLI filters", () => {
   });
 });
 
-function runCli(url: string, args: string[]): Promise<{ code: number | null; stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ["--import", "tsx", "packages/cli/src/index.ts", ...args], {
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        AGENTPOSTOFFICE_URL: url,
-        AGENTPOSTOFFICE_TOKEN: "secret",
-      },
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => { stdout += chunk; });
-    child.stderr.on("data", (chunk: string) => { stderr += chunk; });
-    child.on("error", reject);
-    child.on("close", (code) => resolve({ code, stdout, stderr }));
-  });
+async function invoke(url: string, args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+  const previousUrl = process.env.AGENTPOSTOFFICE_URL;
+  const previousToken = process.env.AGENTPOSTOFFICE_TOKEN;
+  process.env.AGENTPOSTOFFICE_URL = url;
+  process.env.AGENTPOSTOFFICE_TOKEN = "secret";
+  let stdout = "";
+  let stderr = "";
+  const writeOut = process.stdout.write;
+  const writeErr = process.stderr.write;
+  process.stdout.write = ((chunk: string | Uint8Array) => {
+    stdout += String(chunk);
+    return true;
+  }) as typeof process.stdout.write;
+  process.stderr.write = ((chunk: string | Uint8Array) => {
+    stderr += String(chunk);
+    return true;
+  }) as typeof process.stderr.write;
+  try {
+    const code = await runCli(args);
+    return { code, stdout, stderr };
+  } finally {
+    process.stdout.write = writeOut;
+    process.stderr.write = writeErr;
+    if (previousUrl === undefined) delete process.env.AGENTPOSTOFFICE_URL;
+    else process.env.AGENTPOSTOFFICE_URL = previousUrl;
+    if (previousToken === undefined) delete process.env.AGENTPOSTOFFICE_TOKEN;
+    else process.env.AGENTPOSTOFFICE_TOKEN = previousToken;
+  }
 }
 
 async function withServer(

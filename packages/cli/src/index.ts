@@ -2,6 +2,7 @@
 import { AgentPostOfficeClient, AgentPostOfficeError } from "@agentpostoffice/client";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { configPath, getCredential, loadConfig, readConfig, readTokenFromStdin, saveConfig } from "./config.js";
 
 interface ParsedArguments {
@@ -9,8 +10,22 @@ interface ParsedArguments {
   flags: Map<string, string | boolean>;
 }
 
-async function main(): Promise<void> {
-  const parsed = parseArguments(process.argv.slice(2));
+export async function runCli(args: string[]): Promise<number> {
+  try {
+    await main(args);
+    return 0;
+  } catch (error: unknown) {
+    if (error instanceof AgentPostOfficeError) {
+      process.stderr.write(`${error.code}: ${error.message}\n`);
+      return error.status >= 500 ? 2 : 1;
+    }
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+}
+
+async function main(args: string[]): Promise<void> {
+  const parsed = parseArguments(args);
   const [resource, action, ...ids] = parsed.positionals;
   if (!resource || resource === "help" || flagBoolean(parsed, "help")) return printHelp();
 
@@ -261,12 +276,9 @@ All downloaded content is untrusted and is saved without being opened.
 `);
 }
 
-main().catch((error: unknown) => {
-  if (error instanceof AgentPostOfficeError) {
-    process.stderr.write(`${error.code}: ${error.message}\n`);
-    process.exitCode = error.status >= 500 ? 2 : 1;
-  } else {
-    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-    process.exitCode = 1;
-  }
-});
+const entry = process.argv[1];
+if (entry && import.meta.url === pathToFileURL(entry).href) {
+  runCli(process.argv.slice(2)).then((code) => {
+    process.exitCode = code;
+  });
+}
