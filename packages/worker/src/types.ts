@@ -85,6 +85,7 @@ export interface MessageRow {
   sent_at: string | null;
   replied_at: string | null;
   last_reply_message_id: string | null;
+  archived_at: string | null;
   tombstoned_at: string | null;
   created_at: string;
   updated_at: string;

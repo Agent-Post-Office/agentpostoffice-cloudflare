@@ -8,6 +8,8 @@ Before upgrading, compare the deployed version and runtime with the proposed rel
 
 Run `npm ci`, `npm test`, `npm run check`, and `npm run build` before deployment. Confirm the canonical OpenAPI includes every route and regenerate its JSON artifact when it changes. Inspect migrations and declare the release's schema mode: none, additive expansion, or destructive contraction. A Worker rollback does not roll back the database.
 
+The thread filter and archive marker are an additive expansion. `0005_message_archived.sql` adds nullable `messages.archived_at` and does not backfill. `0006_message_thread_feed.sql` adds `messages_thread_feed_idx` on `(thread_id, tombstoned_at, received_at, id)` and does not change rows. Apply `0005` before relying on archive reads or writes. Deploying this Worker after `0005` is the supported order: list, thread, and archive routes return their normal status codes, including when `0006` is still pending, because queries do not name the index. Deploying the Worker before `0005` leaves the default feed, `thread_id` filter, and processed-state updates working; those statements do not read `archived_at` (`thread_id` already exists from `0003`). `archived=true|false` and a PATCH body that sets `archived` then fail with HTTP 500 until `0005` is applied. Rolling the Worker back does not remove the column.
+
 For each selected instance:
 
 1. Verify the existing Wrangler account, Worker name, domain, deployment version, and named configuration.

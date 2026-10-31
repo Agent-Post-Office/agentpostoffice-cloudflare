@@ -74,6 +74,8 @@ export function createAgentPostOfficeMcpServer(
       state: z.enum(["processed", "unprocessed"]).default("unprocessed"),
       direction: z.enum(["inbound", "outbound"]).optional(),
       replied: z.enum(["true", "false"]).optional(),
+      thread_id: z.string().min(1).max(128).optional(),
+      archived: z.enum(["true", "false"]).optional(),
       order: z.enum(["asc", "desc"]).default("asc"),
       limit: z.number().int().min(1).max(100).default(25),
       cursor: z.string().optional(),
@@ -83,6 +85,8 @@ export function createAgentPostOfficeMcpServer(
     state: input.state,
     direction: input.direction,
     replied: input.replied === undefined ? undefined : input.replied === "true",
+    threadId: input.thread_id,
+    archived: input.archived === undefined ? undefined : input.archived === "true",
     order: input.order,
     limit: input.limit,
     cursor: input.cursor,
@@ -104,6 +108,11 @@ export function createAgentPostOfficeMcpServer(
   }, async ({ message_id, processed }) => output(await client.updateMessage(message_id, {
     state: processed ? "processed" : "unprocessed",
   })));
+
+  server.registerTool("set_message_archived", {
+    description: "Archive or unarchive a message. Does not change processed state or replied_at.",
+    inputSchema: { message_id: z.string(), archived: z.boolean() },
+  }, async ({ message_id, archived }) => output(await client.updateMessage(message_id, { archived })));
 
   server.registerTool("send_message", {
     description: "Send one transactional email from an active mailbox. Not for campaigns or cold outreach.",

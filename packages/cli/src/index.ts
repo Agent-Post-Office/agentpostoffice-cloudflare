@@ -85,21 +85,14 @@ async function runInboxes(client: AgentPostOfficeClient, action: string | undefi
 
 async function runMessages(client: AgentPostOfficeClient, action: string | undefined, ids: string[], parsed: ParsedArguments): Promise<void> {
   if (action === "list") {
-    return print(await client.listMessages({
-      inboxId: optionalString(parsed, "inbox"),
-      state: optionalEnum(parsed, "state", ["processed", "unprocessed"] as const),
-      direction: optionalEnum(parsed, "direction", ["inbound", "outbound"] as const),
-      replied: optionalReplied(parsed),
-      order: optionalEnum(parsed, "order", ["asc", "desc"] as const),
-      limit: optionalNumber(parsed, "limit"),
-      cursor: optionalString(parsed, "cursor"),
-      since: optionalString(parsed, "since"),
-      until: optionalString(parsed, "until"),
-    }));
+    return print(await client.listMessages(messageListOptions(parsed)));
   }
   if (action === "get" && ids[0]) return print(await client.getMessage(ids[0]));
   if ((action === "ack" || action === "unack") && ids[0]) {
     return print(await client.updateMessage(ids[0], { state: action === "ack" ? "processed" : "unprocessed" }));
+  }
+  if ((action === "archive" || action === "unarchive") && ids[0]) {
+    return print(await client.updateMessage(ids[0], { archived: action === "archive" }));
   }
   if (action === "delete" && ids[0]) {
     if (!flagBoolean(parsed, "yes")) throw new Error("Deletion requires --yes");
@@ -124,7 +117,7 @@ async function runMessages(client: AgentPostOfficeClient, action: string | undef
     await saveResponse(await client.downloadAttachment(ids[0], ids[1]), output);
     return print({ saved: output, opened: false, untrusted_content: true });
   }
-  throw new Error("Usage: agentpostoffice messages <list|get|ack|unack|delete|bulk-delete|raw|attachment>");
+  throw new Error("Usage: agentpostoffice messages <list|get|ack|unack|archive|unarchive|delete|bulk-delete|raw|attachment>");
 }
 
 async function bodyText(parsed: ParsedArguments): Promise<string> {
@@ -181,9 +174,63 @@ function optionalNumber(parsed: ParsedArguments, name: string): number | undefin
   return parsedValue;
 }
 
-function optionalReplied(parsed: ParsedArguments): boolean | undefined {
+function messageListOptions(parsed: ParsedArguments) {
+  const direction = optionalEnum(parsed, "direction", ["inbound", "outbound"] as const);
+  return {
+    inboxId: optionalString(parsed, "inbox"),
+    state: optionalEnum(parsed, "state", ["processed", "unprocessed"] as const),
+    direction,
+    replied: optionalReplied(parsed, direction),
+    threadId: optionalThread(parsed),
+    archived: optionalArchived(parsed),
+    order: optionalEnum(parsed, "order", ["asc", "desc"] as const),
+    limit: optionalNumber(parsed, "limit"),
+    cursor: optionalString(parsed, "cursor"),
+    since: optionalString(parsed, "since"),
+    until: optionalString(parsed, "until"),
+  };
+}
+
+function optionalReplied(
+  parsed: ParsedArguments,
+  direction: "inbound" | "outbound" | undefined,
+): boolean | undefined {
+  const unanswered = bareFlag(parsed, "unanswered");
   const value = optionalEnum(parsed, "replied", ["true", "false"] as const);
-  return value === undefined ? undefined : value === "true";
+  if (unanswered && value === "true") {
+    throw new AgentPostOfficeError(400, "invalid_filter", "replied cannot be combined with --unanswered");
+  }
+  const replied = unanswered || value === "false" ? false : value === "true" ? true : undefined;
+  if (replied !== undefined && direction === "outbound") {
+    throw new AgentPostOfficeError(400, "invalid_filter", "replied cannot be combined with direction=outbound");
+  }
+  return replied;
+}
+
+function optionalArchived(parsed: ParsedArguments): boolean | undefined {
+  const archived = bareFlag(parsed, "archived");
+  const unarchived = bareFlag(parsed, "unarchived");
+  if (archived && unarchived) {
+    throw new AgentPostOfficeError(400, "invalid_filter", "archived cannot be combined with --unarchived");
+  }
+  if (archived) return true;
+  if (unarchived) return false;
+  return undefined;
+}
+
+function optionalThread(parsed: ParsedArguments): string | undefined {
+  if (!parsed.flags.has("thread")) return undefined;
+  const value = parsed.flags.get("thread");
+  if (typeof value !== "string" || value.length === 0 || value.length > 128) {
+    throw new AgentPostOfficeError(400, "invalid_filter", "thread_id is invalid");
+  }
+  return value;
+}
+
+function bareFlag(parsed: ParsedArguments, name: string): boolean {
+  if (!parsed.flags.has(name)) return false;
+  if (parsed.flags.get(name) === true) return true;
+  throw new AgentPostOfficeError(400, "invalid_filter", `${name} is invalid`);
 }
 
 function optionalEnum<T extends readonly string[]>(parsed: ParsedArguments, name: string, values: T): T[number] | undefined {
@@ -205,7 +252,8 @@ function printHelp(): void {
   status
   inboxes list|get|create|enable|disable
   sieve list|validate|put|test|activate|disable
-  messages list|get|ack|unack|delete|bulk-delete|raw|attachment
+  messages list|get|ack|unack|archive|unarchive|delete|bulk-delete|raw|attachment
+    list: --inbox --state --direction --replied --unanswered --thread --archived --unarchived --since --until --order --limit --cursor
   send --inbox ID --to ADDRESS --subject TEXT --text TEXT
   reply MESSAGE_ID --text TEXT
 

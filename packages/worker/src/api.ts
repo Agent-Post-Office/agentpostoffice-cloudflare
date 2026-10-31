@@ -316,6 +316,14 @@ async function listMessages(url: URL, env: Env): Promise<Response> {
   if ((replied === "true" || replied === "false") && direction === "outbound") {
     throw new HttpError(400, "invalid_filter", "replied cannot be combined with direction=outbound");
   }
+  const threadId = url.searchParams.get("thread_id");
+  if (threadId !== null && (threadId.length === 0 || threadId.length > 128)) {
+    throw new HttpError(400, "invalid_filter", "thread_id is invalid");
+  }
+  const archived = url.searchParams.get("archived");
+  if (archived !== null && archived !== "true" && archived !== "false") {
+    throw new HttpError(400, "invalid_filter", "archived is invalid");
+  }
   const inboxId = url.searchParams.get("inbox_id");
   const since = validTimestamp(url.searchParams.get("since"), "since");
   const until = validTimestamp(url.searchParams.get("until"), "until");
@@ -329,6 +337,9 @@ async function listMessages(url: URL, env: Env): Promise<Response> {
   else if (replied === "true" || replied === "false") clauses.push("m.direction = 'inbound'");
   if (replied === "true") clauses.push("m.replied_at IS NOT NULL");
   if (replied === "false") clauses.push("m.replied_at IS NULL");
+  if (threadId) { clauses.push("m.thread_id = ?"); bindings.push(threadId); }
+  if (archived === "true") clauses.push("m.archived_at IS NOT NULL");
+  if (archived === "false") clauses.push("m.archived_at IS NULL");
   if (inboxId) { clauses.push("m.inbox_id = ?"); bindings.push(inboxId); }
   if (since) { clauses.push("m.received_at >= ?"); bindings.push(since); }
   if (until) { clauses.push("m.received_at <= ?"); bindings.push(until); }
@@ -383,11 +394,25 @@ async function updateMessage(request: Request, messageId: string, env: Env): Pro
   const state = input.state === undefined ? row.agent_state : input.state;
   if (state !== "processed" && state !== "unprocessed") throw new HttpError(400, "invalid_request", "state is invalid");
   const labels = input.labels === undefined ? parseJsonArray(row.labels_json) : validateLabels(input.labels);
+  if (input.archived !== undefined && typeof input.archived !== "boolean") {
+    throw new HttpError(400, "invalid_request", "archived must be a boolean");
+  }
   const updatedAt = nowIso();
+  const currentArchivedAt = row.archived_at ?? null;
+  // State-only updates omit archived_at so a Worker deployed before migration
+  // 0005 can still acknowledge mail. Archive writes name the column and fail
+  // until that migration is applied.
+  if (input.archived === undefined) {
+    await env.DB.prepare(
+      "UPDATE messages SET agent_state = ?, labels_json = ?, updated_at = ? WHERE id = ?",
+    ).bind(state, JSON.stringify(labels), updatedAt, messageId).run();
+    return json({ data: { id: messageId, state, labels, archived_at: currentArchivedAt, updated_at: updatedAt } });
+  }
+  const archivedAt = input.archived ? (currentArchivedAt ?? updatedAt) : null;
   await env.DB.prepare(
-    "UPDATE messages SET agent_state = ?, labels_json = ?, updated_at = ? WHERE id = ?",
-  ).bind(state, JSON.stringify(labels), updatedAt, messageId).run();
-  return json({ data: { id: messageId, state, labels, updated_at: updatedAt } });
+    "UPDATE messages SET agent_state = ?, labels_json = ?, archived_at = ?, updated_at = ? WHERE id = ?",
+  ).bind(state, JSON.stringify(labels), archivedAt, updatedAt, messageId).run();
+  return json({ data: { id: messageId, state, labels, archived_at: archivedAt, updated_at: updatedAt } });
 }
 
 async function deleteMessage(messageId: string, env: Env): Promise<Response> {
@@ -514,6 +539,7 @@ function serializeMessage(
     sent_at: row.sent_at,
     replied_at: row.replied_at ?? null,
     last_reply_message_id: row.last_reply_message_id ?? null,
+    archived_at: row.archived_at ?? null,
     from: { address: row.envelope_from },
     to: { address: row.envelope_to },
     subject: row.subject,

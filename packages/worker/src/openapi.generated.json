@@ -574,6 +574,28 @@
             }
           },
           {
+            "name": "thread_id",
+            "in": "query",
+            "description": "Exact match on messages.thread_id. Combines with the other list filters. Results stay in this deployment's inboxes; inbox_id restricts the thread to one mailbox, so a thread id that exists only in another inbox is omitted. Legacy rows with a NULL thread_id are not included.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "archived",
+            "in": "query",
+            "description": "Limit the feed to messages with or without an archive timestamp. Independent of processed state and replied_at. Omitted means both are returned; archived messages are not hidden by default.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          },
+          {
             "name": "since",
             "in": "query",
             "schema": {
@@ -815,12 +837,12 @@
         }
       },
       "patch": {
-        "summary": "Update message state or labels",
+        "summary": "Update message state, labels, or the archive marker",
         "operationId": "updateMessage",
         "x-required-scopes": [
           "messages:update"
         ],
-        "description": "Requires the messages:update scope on a valid bearer key.",
+        "description": "Requires the messages:update scope on a valid bearer key. Archiving does not change processed state or replied_at.",
         "requestBody": {
           "required": true,
           "content": {
@@ -841,6 +863,10 @@
                       "type": "string",
                       "maxLength": 64
                     }
+                  },
+                  "archived": {
+                    "type": "boolean",
+                    "description": "Set or clear the archive marker. Does not change processed state or replied_at. true keeps an existing archived_at timestamp."
                   }
                 }
               }
@@ -1305,6 +1331,13 @@
               "string",
               "null"
             ]
+          },
+          "archived_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
           },
           "from": {
             "type": "object",
