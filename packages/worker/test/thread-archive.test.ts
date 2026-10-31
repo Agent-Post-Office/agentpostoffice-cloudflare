@@ -542,6 +542,29 @@ describe("migration ordering", () => {
       archived_at: null,
     });
   });
+
+  it("returns 500 when D1 reports an error other than a missing archived_at column", async () => {
+    await seedMessage({
+      id: "msg_other_d1",
+      inboxId: "inb_home",
+      threadId: thread,
+      receivedAt: now,
+    });
+    const executionEnv = unrelatedD1ErrorEnv();
+
+    const archivedFilter = await handleApi(readRequest("/v1/messages?archived=false"), executionEnv);
+    expect(archivedFilter.status).toBe(500);
+    expect(await archivedFilter.json()).toEqual({ error: { code: "internal_error", message: "Internal server error" } });
+
+    const archivedWrite = await handleApi(patchRequest("msg_other_d1", { archived: true }), executionEnv);
+    expect(archivedWrite.status).toBe(500);
+    expect(await archivedWrite.json()).toEqual({ error: { code: "internal_error", message: "Internal server error" } });
+    expect(await row("msg_other_d1")).toMatchObject({ agent_state: "unprocessed", archived_at: null });
+
+    const listed = await handleApi(readRequest("/v1/messages?order=asc"), executionEnv);
+    expect(listed.status).toBe(200);
+    expect((await listed.json() as { data: Array<{ id: string }> }).data.map((message) => message.id)).toEqual(["msg_other_d1"]);
+  });
 });
 
 function readRequest(path: string, bearer = token): Request {
@@ -579,7 +602,39 @@ function recordingEnv(prepared: Array<{ sql: string; bindings: unknown[] }>): En
 }
 
 function missingColumnError(): Error {
-  return new Error("D1_ERROR: no such column: archived_at: SQLITE_ERROR");
+  return new Error("D1_ERROR: no such column: m.archived_at at offset 34: SQLITE_ERROR");
+}
+
+function unrelatedD1ErrorEnv(): Env {
+  const database = env.DB;
+  const failure = () => new Error("D1_ERROR: no such column: m.subject at offset 12: SQLITE_ERROR");
+  return {
+    ...workerEnv,
+    DB: {
+      prepare(sql: string) {
+        if (/\barchived_at\b/i.test(sql)) {
+          const rejected = {
+            bind(..._values: unknown[]) {
+              return rejected;
+            },
+            async all(): Promise<never> {
+              throw failure();
+            },
+            async first(): Promise<never> {
+              throw failure();
+            },
+            async run(): Promise<never> {
+              throw failure();
+            },
+          };
+          return rejected;
+        }
+        return database.prepare(sql);
+      },
+      batch: (statements: D1PreparedStatement[]) => database.batch(statements),
+      exec: database.exec.bind(database),
+    },
+  } as Env;
 }
 
 function racingArchiveEnv(messageId: string): Env {

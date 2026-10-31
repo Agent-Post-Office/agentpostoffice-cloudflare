@@ -444,7 +444,7 @@ async function readArchiveQuery<T>(work: () => Promise<T>): Promise<T> {
 }
 
 function missingArchivedColumn(error: unknown): boolean {
-  const pending = /no such column:\s*archived_at/i;
+  const pending = /no such column:\s*(?:\w+\.)?archived_at\b/i;
   const seen = new Set<unknown>();
   let current: unknown = error;
   while (current && !seen.has(current)) {
