@@ -6,7 +6,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentPostOfficeClient } from "../packages/client/src/index.js";
+import {
+  FILESYSTEM_TOOL_NAMES,
+  MCP_MAX_INLINE_ATTACHMENT_BYTES,
+  MCP_MAX_TOOL_OUTPUT_BYTES,
+  MCP_SCOPES,
+  output,
+  sharedTools,
+} from "../packages/mcp/src/catalog.js";
 import { createAgentPostOfficeMcpServer } from "../packages/mcp/src/server.js";
+import { ALL_SCOPES } from "../packages/worker/src/types.js";
 
 describe("Agent Post Office MCP contract", () => {
   it("exposes bounded API operations and keeps HTML opt-in", async () => {
@@ -301,5 +310,126 @@ describe("Agent Post Office MCP contract", () => {
       await server.close();
       await rm(temporary, { recursive: true, force: true });
     }
+  });
+
+  it("returns a checksum-verified base64 attachment under the inline cap", async () => {
+    const bytes = "attachment bytes";
+    const checksum = createHash("sha256").update(bytes).digest("hex");
+    const downloadAttachment = vi.fn(async () => new Response(bytes, { headers: { "Content-Length": String(bytes.length) } }));
+    const fakeClient = {
+      getMessage: vi.fn(async () => ({
+        attachments: [{
+          id: "att_1",
+          filename: "note.txt",
+          media_type: "text/plain",
+          disposition: "attachment",
+          size: bytes.length,
+          checksum_sha256: checksum,
+        }],
+      })),
+      downloadAttachment,
+    } as unknown as AgentPostOfficeClient;
+    const server = createAgentPostOfficeMcpServer(fakeClient);
+    const client = new Client({ name: "test", version: "1.0.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+      const saved = await client.callTool({
+        name: "get_attachment",
+        arguments: { message_id: "msg_1", attachment_id: "att_1", acknowledge_untrusted_bytes: true },
+      });
+      expect(saved.isError).not.toBe(true);
+      const payload = JSON.parse((saved.content[0] as { text: string }).text) as {
+        untrusted_content: boolean;
+        data: { data_base64: string; checksum_sha256: string };
+      };
+      expect(payload.untrusted_content).toBe(true);
+      expect(payload.data.checksum_sha256).toBe(checksum);
+      expect(Buffer.from(payload.data.data_base64, "base64").toString("utf8")).toBe(bytes);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("refuses an inline attachment above the cap before downloading", async () => {
+    const downloadAttachment = vi.fn(async () => new Response("nope"));
+    const fakeClient = {
+      getMessage: vi.fn(async () => ({
+        attachments: [{
+          id: "att_big",
+          filename: "big.bin",
+          media_type: "application/octet-stream",
+          disposition: "attachment",
+          size: MCP_MAX_INLINE_ATTACHMENT_BYTES + 1,
+          checksum_sha256: "a".repeat(64),
+        }],
+      })),
+      downloadAttachment,
+    } as unknown as AgentPostOfficeClient;
+    const server = createAgentPostOfficeMcpServer(fakeClient);
+    const client = new Client({ name: "test", version: "1.0.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+      const result = await client.callTool({
+        name: "get_attachment",
+        arguments: { message_id: "msg_1", attachment_id: "att_big", acknowledge_untrusted_bytes: true },
+      });
+      expect(result.isError).toBe(true);
+      expect(downloadAttachment).not.toHaveBeenCalled();
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+});
+
+describe("shared MCP catalog", () => {
+  it("uses the REST scope list and the same tools on stdio and HTTP except filesystem saves", async () => {
+    expect([...MCP_SCOPES]).toEqual([...ALL_SCOPES]);
+    const fakeClient = {} as AgentPostOfficeClient;
+    const server = createAgentPostOfficeMcpServer(fakeClient);
+    const client = new Client({ name: "test", version: "1.0.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+      const listed = (await client.listTools()).tools.map((tool) => tool.name).sort();
+      const httpNames = sharedTools.map((tool) => tool.name).sort();
+      const filesystem = [...FILESYSTEM_TOOL_NAMES].sort();
+      expect(listed.filter((name) => !filesystem.includes(name as typeof filesystem[number]))).toEqual(httpNames);
+      expect(listed.filter((name) => filesystem.includes(name as typeof filesystem[number]))).toEqual(filesystem);
+      expect(httpNames).not.toEqual(expect.arrayContaining(filesystem));
+      expect(httpNames).toContain("get_attachment");
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("requires confirmation for delete and Sieve changes, and not for send or reply", () => {
+    const schemaOf = (name: string) => sharedTools.find((tool) => tool.name === name)?.inputSchema;
+    expect(schemaOf("delete_message")).toHaveProperty("confirmed");
+    expect(schemaOf("delete_messages")).toHaveProperty("confirmed");
+    expect(schemaOf("activate_sieve_revision")).toHaveProperty("confirmed");
+    expect(schemaOf("disable_sieve")).toHaveProperty("confirmed");
+    expect(schemaOf("send_message")).not.toHaveProperty("confirmed");
+    expect(schemaOf("reply_to_message")).not.toHaveProperty("confirmed");
+  });
+
+  it("bounds tool output without echoing the oversized payload", () => {
+    const huge = "x".repeat(MCP_MAX_TOOL_OUTPUT_BYTES);
+    const result = output(huge);
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain("output_too_large");
+    expect(result.content[0]?.text).not.toContain(huge.slice(0, 64));
+    expect(MCP_MAX_INLINE_ATTACHMENT_BYTES).toBeLessThan(MCP_MAX_TOOL_OUTPUT_BYTES);
+  });
+
+  it("documents the per-instance remote MCP URL and bearer header", async () => {
+    const readme = await readFile("README.md", "utf8");
+    expect(readme).toContain("https://<your-worker>/mcp");
+    expect(readme).toContain("Authorization");
+    expect(readme).toContain("Bearer apo_<key-id>_<secret>");
   });
 });
