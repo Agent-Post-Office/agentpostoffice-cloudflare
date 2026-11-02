@@ -17,7 +17,7 @@
     "clean": "npm run clean --workspaces --if-present",
     "test": "npm run test:unit && npm run test:worker",
     "test:unit": "vitest run --config vitest.config.ts",
-    "test:worker": "vitest run --config packages/worker/vitest.config.ts",
+    "test:worker": "vitest run --config packages/worker/vitest.config.ts && vitest run --config packages/worker/vitest.pre0005.config.ts",
     "test:watch": "vitest --config vitest.config.ts",
     "openapi:lint": "redocly lint packages/openapi/spec/openapi.yaml",
     "dev": "npm --workspace @agentpostoffice/worker run dev",
@@ -42,7 +42,7 @@
     "hono": "4.13.8",
     "ip-address": "10.7.2",
     "postcss": "8.5.28",
-    "qs": "6.16.0",
+    "qs": "6.17.1",
     "sharp": "0.35.4",
     "undici": "7.29.1"
   }

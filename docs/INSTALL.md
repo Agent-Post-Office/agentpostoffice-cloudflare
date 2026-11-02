@@ -41,4 +41,4 @@ Use Node.js 20+ and npm, a domain on Cloudflare DNS, and a Cloudflare account wi
 
 For agent-assisted installation, ask your agent to follow the repository's `agentpostoffice-setup` skill using your existing login, exact domain, and intended inboxes. Review proposed live changes before authorizing deployment, DNS/MX changes, routing, sending onboarding, or real test mail. Never paste tokens into chat.
 
-See the [installation reference](./INSTALL-REFERENCE.md) for credential permissions, token administration, migration, troubleshooting, and optional MCP configuration. Working delivery does not complete the full developer-preview [Phase 0 proof matrix](./PHASE-0.md).
+See the [installation reference](./INSTALL-REFERENCE.md) for credential permissions, token administration, migration, troubleshooting, and remote HTTP or local stdio MCP configuration. Working delivery does not complete the full developer-preview [Phase 0 proof matrix](./PHASE-0.md).
