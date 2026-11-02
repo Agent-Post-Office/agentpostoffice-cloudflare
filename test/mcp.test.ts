@@ -410,6 +410,81 @@ describe("shared MCP catalog", () => {
     }
   });
 
+  it("publishes input constraints and applies defaults before a tool runs", async () => {
+    const sendMessage = vi.fn(async () => ({ id: "msg_out" }));
+    const listMessages = vi.fn(async () => ({ data: [], next_cursor: null }));
+    const updateMessage = vi.fn(async () => ({ id: "msg_1", state: "processed" }));
+    const server = new McpServer({ name: "agentpostoffice", version: "0.1.0" });
+    registerSharedTools(server, { sendMessage, listMessages, updateMessage } as unknown as McpOperations);
+    const client = new Client({ name: "test", version: "1.0.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+      const tools = await client.listTools();
+      const schemaOf = (name: string) => tools.tools.find((tool) => tool.name === name)?.inputSchema as {
+        properties?: Record<string, Record<string, unknown>>;
+        required?: string[];
+      };
+      expect(schemaOf("send_message")).toMatchObject({
+        properties: {
+          to: { type: "string", format: "email" },
+          subject: { type: "string", minLength: 1, maxLength: 998 },
+          text: { type: "string", maxLength: 1_000_000 },
+          idempotency_key: { type: "string", minLength: 8, maxLength: 200 },
+        },
+      });
+      expect(schemaOf("send_message").required).toEqual(expect.arrayContaining([
+        "inbox_id",
+        "to",
+        "subject",
+        "text",
+        "idempotency_key",
+      ]));
+      expect(schemaOf("poll_messages")).toMatchObject({
+        properties: {
+          state: { type: "string", enum: ["processed", "unprocessed"], default: "unprocessed" },
+          order: { type: "string", enum: ["asc", "desc"], default: "asc" },
+          limit: { type: "integer", minimum: 1, maximum: 100, default: 25 },
+          thread_id: { type: "string", minLength: 1, maxLength: 128 },
+        },
+      });
+      expect(schemaOf("poll_messages").required ?? []).not.toEqual(expect.arrayContaining(["state", "order", "limit"]));
+      expect(schemaOf("acknowledge_message").properties?.processed).toMatchObject({ type: "boolean", default: true });
+
+      const invalid = await client.callTool({
+        name: "send_message",
+        arguments: {
+          inbox_id: "inb_test",
+          to: "not-an-email",
+          subject: "Hello",
+          text: "Body",
+          idempotency_key: "12345678",
+        },
+      });
+      expect(invalid.isError).toBe(true);
+      expect(String(invalid.content?.[0]?.text ?? "")).toContain("Invalid email");
+      expect(sendMessage).not.toHaveBeenCalled();
+
+      const polled = await client.callTool({ name: "poll_messages", arguments: {} });
+      expect(polled.isError).not.toBe(true);
+      expect(listMessages).toHaveBeenCalledWith(expect.objectContaining({
+        state: "unprocessed",
+        order: "asc",
+        limit: 25,
+      }));
+
+      const acknowledged = await client.callTool({
+        name: "acknowledge_message",
+        arguments: { message_id: "msg_1" },
+      });
+      expect(acknowledged.isError).not.toBe(true);
+      expect(updateMessage).toHaveBeenCalledWith("msg_1", { state: "processed" });
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
   it("requires confirmation for delete and Sieve changes, and not for send or reply", () => {
     const schemaOf = (name: string) => sharedTools.find((tool) => tool.name === name)?.inputSchema;
     expect(schemaOf("delete_message")).toHaveProperty("confirmed");
