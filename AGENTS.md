@@ -5,7 +5,7 @@
 - `packages/worker`: Cloudflare Worker, D1 migrations, R2/Queue/email bindings.
 - `packages/client`: reusable REST client and public TypeScript types.
 - `packages/cli`: local agent/operator CLI.
-- `packages/mcp`: MCP server over the REST client.
+- `packages/mcp`: shared MCP tool catalog and the local stdio server. The Worker serves the same tools, except the filesystem saves, at `POST /mcp`.
 - `packages/openapi`: source-of-truth OpenAPI document.
 - `tools`: local provisioning and token-administration helpers.
 

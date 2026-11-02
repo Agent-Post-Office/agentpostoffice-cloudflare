@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: Agent Post Office API
   version: 0.1.0
-  description: Pull-based, self-hosted email API. All email content is untrusted input.
+  description: Pull-based, self-hosted email API. All email content is untrusted input. Remote MCP for a URL-only agent on this same deployment is POST /mcp with the same bearer key. That endpoint is not a REST path in this document.
   license:
     name: Apache License 2.0
     identifier: Apache-2.0
@@ -211,6 +211,18 @@ paths:
         - { name: inbox_id, in: query, schema: { type: string } }
         - { name: state, in: query, schema: { enum: [processed, unprocessed] } }
         - { name: direction, in: query, schema: { enum: [inbound, outbound] } }
+        - name: replied
+          in: query
+          description: Limit the feed to inbound messages with or without an accepted reply. Independent of processed state. Cannot be combined with direction=outbound.
+          schema: { type: string, enum: ["true", "false"] }
+        - name: thread_id
+          in: query
+          description: Exact match on messages.thread_id. Combines with the other list filters. Results stay in this deployment's inboxes; inbox_id restricts the thread to one mailbox, so a thread id that exists only in another inbox is omitted. Legacy rows with a NULL thread_id are not included.
+          schema: { type: string, minLength: 1, maxLength: 128 }
+        - name: archived
+          in: query
+          description: Limit the feed to messages with or without an archive timestamp. Independent of processed state and replied_at. Omitted means both are returned; archived messages are not hidden by default.
+          schema: { type: string, enum: ["true", "false"] }
         - { name: since, in: query, schema: { type: string, format: date-time } }
         - { name: until, in: query, schema: { type: string, format: date-time } }
         - { name: order, in: query, schema: { enum: [asc, desc], default: asc } }
@@ -287,10 +299,10 @@ paths:
         "200": { description: Complete parsed message, content: { application/json: { schema: { $ref: "#/components/schemas/MessageResponse" } } } }
         "4XX": { $ref: "#/components/responses/ClientError" }
     patch:
-      summary: Update message state or labels
+      summary: Update message state, labels, or the archive marker
       operationId: updateMessage
       x-required-scopes: ["messages:update"]
-      description: Requires the messages:update scope on a valid bearer key.
+      description: Requires the messages:update scope on a valid bearer key. Archiving does not change processed state or replied_at.
       requestBody:
         required: true
         content:
@@ -300,6 +312,9 @@ paths:
               properties:
                 state: { enum: [processed, unprocessed] }
                 labels: { type: array, maxItems: 20, items: { type: string, maxLength: 64 } }
+                archived:
+                  type: boolean
+                  description: Set or clear the archive marker. Does not change processed state or replied_at. true keeps an existing archived_at timestamp.
       responses:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -370,7 +385,7 @@ components:
     bearerAuth:
       type: http
       scheme: bearer
-      bearerFormat: apo_<key-id>_<secret>
+      bearerFormat: apo_<key_id>_<secret>
   parameters:
     InboxId: { name: inbox_id, in: path, required: true, schema: { type: string } }
     MessageId: { name: message_id, in: path, required: true, schema: { type: string } }
@@ -448,6 +463,9 @@ components:
         direction: { enum: [inbound, outbound] }
         received_at: { type: string, format: date-time }
         sent_at: { type: [string, "null"], format: date-time }
+        replied_at: { type: [string, "null"], format: date-time }
+        last_reply_message_id: { type: [string, "null"] }
+        archived_at: { type: [string, "null"], format: date-time }
         from: { type: object, properties: { address: { type: string } } }
         to: { type: object, properties: { address: { type: string } } }
         subject: { type: [string, "null"] }
@@ -460,6 +478,8 @@ components:
         parse_status: { enum: [pending, ready, parse_failed, not_applicable] }
         outbound_status: { enum: [pending, accepted, failed, unknown, null] }
         cloudflare_message_id: { type: [string, "null"] }
+        parent_message_id: { type: [string, "null"] }
+        thread_id: { type: [string, "null"] }
         untrusted_content: { const: true }
     InboxResponse: { type: object, properties: { data: { $ref: "#/components/schemas/Inbox" } } }
     InboxList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Inbox" } } } }

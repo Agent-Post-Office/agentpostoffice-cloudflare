@@ -17,7 +17,7 @@
     "clean": "npm run clean --workspaces --if-present",
     "test": "npm run test:unit && npm run test:worker",
     "test:unit": "vitest run --config vitest.config.ts",
-    "test:worker": "vitest run --config packages/worker/vitest.config.ts",
+    "test:worker": "vitest run --config packages/worker/vitest.config.ts && vitest run --config packages/worker/vitest.pre0005.config.ts",
     "test:watch": "vitest --config vitest.config.ts",
     "openapi:lint": "redocly lint packages/openapi/spec/openapi.yaml",
     "dev": "npm --workspace @agentpostoffice/worker run dev",
