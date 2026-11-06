@@ -4,7 +4,10 @@ import { join } from "node:path";
 
 export default defineConfig({
   resolve: {
-    alias: { "@agentpostoffice/sieve": join(import.meta.dirname, "../sieve/src/index.ts") },
+    alias: {
+      "@agentpostoffice/sieve": join(import.meta.dirname, "../sieve/src/index.ts"),
+      "@agent-post-office/spam-filter": join(import.meta.dirname, "../spam-filter/src/index.ts"),
+    },
   },
   plugins: [
     cloudflareTest(async () => {

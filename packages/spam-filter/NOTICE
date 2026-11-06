@@ -1,0 +1,13 @@
+Agent Post Office spam filter
+Copyright 2026 Agent Post Office contributors
+
+This product is licensed under the Apache License, Version 2.0.
+See the LICENSE file.
+
+Extracted from Agent Post Office:
+https://github.com/Agent-Post-Office/agentpostoffice-cloudflare
+
+Optional SpamAssassin rule add-on (planned, not included in this package yet):
+when shipped, that add-on will retain the Apache Software Foundation NOTICE
+and SpamAssassin rule attributions required by the Apache License. SpamAssassin
+is a trademark of the Apache Software Foundation. No ASF endorsement is implied.

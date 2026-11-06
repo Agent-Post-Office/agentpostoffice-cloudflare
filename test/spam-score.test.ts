@@ -197,6 +197,16 @@ describe("spam rules scorer", () => {
     expect(senderAllowBeatsDomainBlock.verdict).toBe("ham");
   });
 
+  it("matches a block rule for the invalid-sender placeholder", () => {
+    const scored = scoreSpam(message({
+      from: "invalid-sender@invalid",
+      subject: "Hello",
+      text: "A short note.",
+      lists: { ...EMPTY_LISTS, blockSenders: ["invalid-sender@invalid"] },
+    }));
+    expect(scored).toEqual({ score: 100, reasons: ["block_sender"], verdict: "spam" });
+  });
+
   it("lets a sender block win when that sender is also allowlisted", () => {
     const both = scoreSpam(message({
       from: "Person <Person@Example.COM>",

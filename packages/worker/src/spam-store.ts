@@ -1,12 +1,14 @@
 import PostalMime from "postal-mime";
 import {
+  spamProbabilityFromStore,
+  type SpamStore,
+} from "@agent-post-office/spam-filter";
+import {
   canonicalTokens,
-  signalProbability,
   spamLearnEnabled,
   spamLearnMin,
   tokenizeMessage,
   trainingDelta,
-  type BayesModel,
   type TrainingState,
 } from "./spam-bayes.js";
 import {
@@ -228,7 +230,7 @@ export async function planMessageTraining(
 export async function loadSpamContext(env: Env, inboxId: string): Promise<{ config: ResolvedSpamConfig; lists: SpamLists }> {
   return {
     config: resolveSpamConfig(env, await readSettings(env, inboxId)),
-    lists: await readLists(env, inboxId),
+    lists: await d1SpamStore(env).getRules(inboxId),
   };
 }
 
@@ -258,39 +260,44 @@ function finishAssessment(
   return { config, assessment, disposition: applySpamFilter(config.mode, assessment, labels) };
 }
 
+function d1SpamStore(env: Env): SpamStore {
+  return {
+    getRules(inboxId) {
+      return readLists(env, inboxId);
+    },
+    async getClassCounts(inboxId) {
+      const counts = await env.DB.prepare(
+        "SELECT spam_messages, ham_messages FROM inbox_spam_class_counts WHERE inbox_id = ?",
+      ).bind(inboxId).first<{ spam_messages: number; ham_messages: number }>();
+      return {
+        spamMessages: counts?.spam_messages ?? 0,
+        hamMessages: counts?.ham_messages ?? 0,
+      };
+    },
+    async getTokenCounts(inboxId, tokens) {
+      const tokenCounts = new Map<string, { spam: number; ham: number }>();
+      if (tokens.length === 0) return tokenCounts;
+      const placeholders = tokens.map(() => "?").join(", ");
+      const rows = await env.DB.prepare(
+        `SELECT token, spam_count, ham_count FROM inbox_spam_token_counts WHERE inbox_id = ? AND token IN (${placeholders})`,
+      ).bind(inboxId, ...tokens).all<{ token: string; spam_count: number; ham_count: number }>();
+      for (const row of rows.results) tokenCounts.set(row.token, { spam: row.spam_count, ham: row.ham_count });
+      return tokenCounts;
+    },
+  };
+}
+
 async function learnedProbability(
   env: Env,
   inboxId: string,
   input: { from: string; subject: string | null; text: string },
 ): Promise<number | null> {
-  const tokens = tokenizeMessage({ subject: input.subject, text: input.text, from: input.from });
-  let model: BayesModel;
   try {
-    model = await readBayesModel(env, inboxId, tokens);
+    return await spamProbabilityFromStore(d1SpamStore(env), inboxId, input, spamLearnMin(env));
   } catch (error) {
     if (missingLearnSchema(error)) return null;
     throw error;
   }
-  return signalProbability(model, tokens, spamLearnMin(env));
-}
-
-async function readBayesModel(env: Env, inboxId: string, tokens: readonly string[]): Promise<BayesModel> {
-  const counts = await env.DB.prepare(
-    "SELECT spam_messages, ham_messages FROM inbox_spam_class_counts WHERE inbox_id = ?",
-  ).bind(inboxId).first<{ spam_messages: number; ham_messages: number }>();
-  const tokenCounts = new Map<string, { spam: number; ham: number }>();
-  if (tokens.length > 0) {
-    const placeholders = tokens.map(() => "?").join(", ");
-    const rows = await env.DB.prepare(
-      `SELECT token, spam_count, ham_count FROM inbox_spam_token_counts WHERE inbox_id = ? AND token IN (${placeholders})`,
-    ).bind(inboxId, ...tokens).all<{ token: string; spam_count: number; ham_count: number }>();
-    for (const row of rows.results) tokenCounts.set(row.token, { spam: row.spam_count, ham: row.ham_count });
-  }
-  return {
-    spamMessages: counts?.spam_messages ?? 0,
-    hamMessages: counts?.ham_messages ?? 0,
-    tokens: tokenCounts,
-  };
 }
 
 type TrainingMessage = Pick<
