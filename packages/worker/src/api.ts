@@ -5,7 +5,15 @@ import { errorResponse, HttpError, json, readJson, requireString } from "./http.
 import { replyToMessage, sendNew } from "./outbound.js";
 import { spamLearnEnabled } from "./spam-bayes.js";
 import { domainOf, labelsForSpamFolder, parseReasonList, withOperatorMark } from "./spam.js";
-import { missingLearnSchema, planMessageTraining, readSpamTraining, spamListStatements } from "./spam-store.js";
+import {
+  backfillSpamTraining,
+  missingLearnSchema,
+  planMessageTraining,
+  readSpamTraining,
+  SPAM_BACKFILL_DEFAULT_LIMIT,
+  SPAM_BACKFILL_MAX_LIMIT,
+  spamListStatements,
+} from "./spam-store.js";
 import type { AttachmentRow, AuthContext, Env, InboxRow, MessageRow, QueueTask } from "./types.js";
 import {
   decodeCursor,
@@ -130,6 +138,11 @@ async function routeInboxes(
     requireScope(auth, "messages:update");
     await getInbox(segments[0], env);
     return spamTrainingResponse(segments[0], env);
+  }
+  if (segments[0] && segments[1] === "spam-training" && segments.length === 2 && request.method === "POST") {
+    requireScope(auth, "messages:update");
+    await getInbox(segments[0], env);
+    return spamBackfillResponse(request, segments[0], env);
   }
   if (!inboxId || segments.length !== 1) throw new HttpError(404, "not_found", "Route not found");
   if (request.method === "GET") {
@@ -615,6 +628,34 @@ async function spamTrainingResponse(inboxId: string, env: Env): Promise<Response
     if (missingLearnSchema(error)) throw new HttpError(503, "migration_pending", "spam training requires migration 0008");
     throw error;
   }
+}
+
+async function spamBackfillResponse(request: Request, inboxId: string, env: Env): Promise<Response> {
+  const input = await readOptionalObject(request);
+  const limit = backfillLimit(input.limit);
+  const cursor = backfillCursor(input.cursor);
+  try {
+    return json({ data: await backfillSpamTraining(env, inboxId, { limit, cursor }) });
+  } catch (error) {
+    if (missingLearnSchema(error)) throw new HttpError(503, "migration_pending", "spam training requires migration 0008");
+    throw error;
+  }
+}
+
+function backfillLimit(value: unknown): number {
+  if (value === undefined) return SPAM_BACKFILL_DEFAULT_LIMIT;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > SPAM_BACKFILL_MAX_LIMIT) {
+    throw new HttpError(400, "invalid_request", `limit must be between 1 and ${SPAM_BACKFILL_MAX_LIMIT}`);
+  }
+  return value;
+}
+
+function backfillCursor(value: unknown): string | null {
+  if (value === undefined || value === null || value === "") return null;
+  if (typeof value !== "string" || value.length > 128) {
+    throw new HttpError(400, "invalid_request", "cursor is invalid");
+  }
+  return value;
 }
 
 async function readOptionalObject(request: Request): Promise<Record<string, unknown>> {

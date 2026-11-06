@@ -206,6 +206,19 @@ export function withOperatorMark(value: string | null | undefined): string[] {
   return reasons;
 }
 
+// The mark routes record a class as this triple: operator_mark, the verdict, and the folder.
+// A flipped mark keeps only the final triple. Auto-scored mail has no operator_mark.
+export function operatorMarkLabel(message: {
+  folder?: string | null;
+  spam_verdict?: string | null;
+  spam_reasons_json?: string | null;
+}): "spam" | "ham" | null {
+  if (!parseReasonList(message.spam_reasons_json).includes("operator_mark")) return null;
+  if (message.spam_verdict === "spam" && message.folder === "spam") return "spam";
+  if (message.spam_verdict === "ham" && message.folder === "inbox") return "ham";
+  return null;
+}
+
 export function mergeAuthenticationResults(
   headers: readonly { key?: string; value?: string }[],
   stored: Record<string, string>,

@@ -107,7 +107,8 @@ describe("spam learning gate", () => {
       reasons: JSON.parse(other.spam_reasons_json ?? "[]"),
       verdict: other.spam_verdict,
     })).toBe(JSON.stringify(rules));
-    expect(await classCounts("inb_other")).toBeNull();
+    expect(await classCounts("inb_other")).toEqual({ spam_messages: 0, ham_messages: 0 });
+    expect(await trainingCountFor("inb_other")).toBe(0);
   });
 
   it("counts a mark once and moves the counts on a flip", async () => {
@@ -258,6 +259,215 @@ describe("spam learning gate", () => {
     expect(perMessage, `bayes_worker_cpu_ms=${perMessage.toFixed(4)}`).toBeLessThan(5);
   });
 });
+
+describe("spam training backfill", () => {
+  it("trains existing marks once, keeps a flip's final class, and does not double-count a later live mark", async () => {
+    await markOff("msg_bf_spam", "inb_spam", SPAM_FROM, SPAM_SUBJECT, SPAM_TEXT, true);
+    await markOff("msg_bf_ham", "inb_spam", HAM_FROM, HAM_SUBJECT, "A weekly note.", false);
+    await markOff("msg_bf_flip", "inb_spam", SPAM_FROM, "old prizewinner wiretransfer", SPAM_TEXT, true);
+    expect((await api("/v1/messages/msg_bf_flip/mark-not-spam", { method: "POST", body: "{}" }, workerEnv)).status).toBe(200);
+    await markOff("msg_bf_other", "inb_other", SPAM_FROM, SPAM_SUBJECT, SPAM_TEXT, true);
+    await ready("msg_bf_auto", "inb_spam", SPAM_FROM, SPAM_SUBJECT, SPAM_TEXT);
+    await env.DB.prepare(
+      "UPDATE messages SET folder = 'spam', spam_verdict = 'spam', spam_reasons_json = ? WHERE id = 'msg_bf_auto'",
+    ).bind(JSON.stringify(["cold_audit"])).run();
+    await markOff("msg_bf_mismatch", "inb_spam", SPAM_FROM, SPAM_SUBJECT, SPAM_TEXT, true);
+    await env.DB.prepare("UPDATE messages SET folder = 'inbox' WHERE id = 'msg_bf_mismatch'").run();
+    expect(await trainingCount()).toBe(0);
+
+    const denied = await api("/v1/inboxes/inb_spam/spam-training", { method: "POST", body: "{}" }, learnEnv, readToken);
+    expect(denied.status).toBe(403);
+    expect((await api("/v1/inboxes/inb_missing/spam-training", { method: "POST", body: "{}" }, learnEnv)).status).toBe(404);
+    expect((await api("/v1/inboxes/inb_spam/spam-training", { method: "POST", body: JSON.stringify({ limit: 101 }) }, learnEnv)).status).toBe(400);
+
+    const first = await backfill();
+    expect(first).toMatchObject({ inbox_id: "inb_spam", trained: 3, unchanged: 0, skipped: 0, done: true, next_cursor: null });
+    expect(await classCounts("inb_spam")).toEqual({ spam_messages: 1, ham_messages: 2 });
+    expect(await trainingLabel("msg_bf_spam")).toBe("spam");
+    expect(await trainingLabel("msg_bf_ham")).toBe("ham");
+    expect(await trainingLabel("msg_bf_flip")).toBe("ham");
+    expect(await trainingLabel("msg_bf_other")).toBeNull();
+    expect(await trainingLabel("msg_bf_auto")).toBeNull();
+    expect(await trainingLabel("msg_bf_mismatch")).toBeNull();
+    expect(await classCounts("inb_other")).toBeNull();
+
+    const again = await backfill();
+    expect(again).toMatchObject({ trained: 0, unchanged: 3, skipped: 0, done: true });
+    expect(await classCounts("inb_spam")).toEqual({ spam_messages: 1, ham_messages: 2 });
+    expect(await trainingCount()).toBe(3);
+
+    const oneEnv: Env = { ...workerEnv, SPAM_LEARN: "on", SPAM_LEARN_MIN: "1" };
+    expect((await api("/v1/messages/msg_bf_spam/mark-spam", { method: "POST", body: "{}" }, oneEnv)).status).toBe(200);
+    expect(await classCounts("inb_spam")).toEqual({ spam_messages: 1, ham_messages: 2 });
+    await markLive("msg_bf_later", true, oneEnv);
+    expect(await classCounts("inb_spam")).toEqual({ spam_messages: 2, ham_messages: 2 });
+    expect((await api("/v1/messages/msg_bf_later/mark-not-spam", { method: "POST", body: "{}" }, oneEnv)).status).toBe(200);
+    expect(await classCounts("inb_spam")).toEqual({ spam_messages: 1, ham_messages: 3 });
+    expect(await trainingCount()).toBe(4);
+
+    const tool = await rpc(updateToken, "backfill_spam_training", { inbox_id: "inb_spam", limit: 10 }, oneEnv);
+    expect(tool.result?.isError).not.toBe(true);
+    const toolBody = JSON.parse(tool.result?.content?.[0]?.text ?? "{}") as { data: { trained: number; unchanged: number } };
+    expect(toolBody.data.trained).toBe(0);
+    expect(toolBody.data.unchanged).toBe(4);
+    expect(await classCounts("inb_spam")).toEqual({ spam_messages: 1, ham_messages: 3 });
+  });
+
+  it("pages marked rows and leaves a second full pass unchanged", async () => {
+    await markOff("msg_page_a", "inb_spam", SPAM_FROM, SPAM_SUBJECT, SPAM_TEXT, true);
+    await markOff("msg_page_b", "inb_spam", SPAM_FROM, SPAM_SUBJECT, SPAM_TEXT, true);
+    await markOff("msg_page_c", "inb_spam", SPAM_FROM, SPAM_SUBJECT, SPAM_TEXT, true);
+    const seen: string[] = [];
+    let cursor: string | null = null;
+    let trained = 0;
+    for (let page = 0; page < 5; page += 1) {
+      const body = await backfill(cursor ? { limit: 1, cursor } : { limit: 1 });
+      trained += body.trained;
+      if (body.next_cursor) seen.push(body.next_cursor);
+      cursor = body.next_cursor;
+      if (body.done) break;
+    }
+    expect(trained).toBe(3);
+    expect(seen).toEqual(["msg_page_a", "msg_page_b", "msg_page_c"]);
+    expect(await classCounts("inb_spam")).toEqual({ spam_messages: 3, ham_messages: 0 });
+    const again = await backfill();
+    expect(again).toMatchObject({ trained: 0, unchanged: 3, skipped: 0, done: true });
+    expect(await classCounts("inb_spam")).toEqual({ spam_messages: 3, ham_messages: 0 });
+  });
+
+  it("skips an unreadable message and reads a truncated body from the raw object", async () => {
+    await markOff("msg_bf_ok", "inb_spam", SPAM_FROM, SPAM_SUBJECT, SPAM_TEXT, true);
+    await markOff("msg_bf_bad", "inb_spam", HAM_FROM, HAM_SUBJECT, "gone", false);
+    await env.DB.prepare(
+      "UPDATE messages SET text_excerpt = NULL, body_truncated = 1, raw_r2_key = 'missing/raw.eml' WHERE id = 'msg_bf_bad'",
+    ).run();
+    await markOff("msg_bf_raw", "inb_spam", SPAM_FROM, "plain subject", "short", true);
+    const rawKey = "messages/inb_spam/msg_bf_raw/raw.eml";
+    await env.MAIL_BUCKET.put(rawKey, [
+      "From: person@spammy.test",
+      "To: spam@mail.example.com",
+      "Subject: plain subject",
+      "Content-Type: text/plain; charset=utf-8",
+      "",
+      "rawbodytoken",
+    ].join("\r\n"));
+    await env.DB.prepare(
+      "UPDATE messages SET text_excerpt = NULL, body_truncated = 1, raw_r2_key = ? WHERE id = 'msg_bf_raw'",
+    ).bind(rawKey).run();
+
+    const page = await backfill();
+    expect(page.status ?? 200).toBe(200);
+    expect(page).toMatchObject({ trained: 2, unchanged: 0, skipped: 1, done: true });
+    expect(await trainingLabel("msg_bf_ok")).toBe("spam");
+    expect(await trainingLabel("msg_bf_bad")).toBeNull();
+    expect(await trainingLabel("msg_bf_raw")).toBe("spam");
+    expect(await tokenCounts("inb_spam")).toContainEqual(expect.objectContaining({ token: "rawbodytoken", spam_count: 1, ham_count: 0 }));
+    expect(await classCounts("inb_spam")).toEqual({ spam_messages: 2, ham_messages: 0 });
+
+    const again = await backfill();
+    expect(again).toMatchObject({ trained: 0, unchanged: 2, skipped: 1 });
+    expect(await classCounts("inb_spam")).toEqual({ spam_messages: 2, ham_messages: 0 });
+    expect(await trainingLabel("msg_bf_bad")).toBeNull();
+  });
+
+  it("does not backfill or change the rules score while SPAM_LEARN is off", async () => {
+    await markOff("msg_bf_off", "inb_spam", SPAM_FROM, SPAM_SUBJECT, SPAM_TEXT, true);
+    expect(await trainingCount()).toBe(0);
+    await stage("msg_off_backfill", "inb_spam", SPAM_FROM, SPAM_SUBJECT, SPAM_TEXT, "spammy.test", workerEnv);
+    expect(await trainingCount()).toBe(0);
+    const before = await stored("msg_off_backfill");
+    const expected = scoreSpam(rulesInput(SPAM_FROM, SPAM_SUBJECT, SPAM_TEXT, passingAuth("spammy.test")));
+    expect(JSON.stringify({
+      score: before.spam_score,
+      reasons: JSON.parse(before.spam_reasons_json ?? "[]"),
+      verdict: before.spam_verdict,
+    })).toBe(JSON.stringify(expected));
+
+    expect((await backfill({}, workerEnv)).trained).toBe(1);
+    await stage("msg_off_backfill_2", "inb_spam", SPAM_FROM, SPAM_SUBJECT, SPAM_TEXT, "spammy.test", workerEnv);
+    const after = await stored("msg_off_backfill_2");
+    expect(JSON.stringify({
+      score: after.spam_score,
+      reasons: JSON.parse(after.spam_reasons_json ?? "[]"),
+      verdict: after.spam_verdict,
+    })).toBe(JSON.stringify(expected));
+    expect(JSON.parse(after.spam_reasons_json ?? "[]").some((reason: string) => String(reason).startsWith("bayes_"))).toBe(false);
+    expect(await trainingCount()).toBe(1);
+  });
+
+  it("backfills one page lazily the first time an inbox has no training rows", async () => {
+    await markOff("msg_lazy", "inb_spam", SPAM_FROM, SPAM_SUBJECT, SPAM_TEXT, true);
+    expect(await trainingCount()).toBe(0);
+    await stage("msg_lazy_new", "inb_spam", HAM_FROM, HAM_SUBJECT, "A weekly note.", "weekly.test", learnEnv);
+    expect(await trainingLabel("msg_lazy")).toBe("spam");
+    expect(await classCounts("inb_spam")).toEqual({ spam_messages: 1, ham_messages: 0 });
+    const scored = await stored("msg_lazy_new");
+    const expected = scoreSpam(rulesInput(HAM_FROM, HAM_SUBJECT, "A weekly note.", passingAuth("weekly.test")));
+    expect(JSON.stringify({
+      score: scored.spam_score,
+      reasons: JSON.parse(scored.spam_reasons_json ?? "[]"),
+      verdict: scored.spam_verdict,
+    })).toBe(JSON.stringify(expected));
+    await stage("msg_lazy_new_2", "inb_spam", HAM_FROM, HAM_SUBJECT, "A weekly note.", "weekly.test", learnEnv);
+    expect(await classCounts("inb_spam")).toEqual({ spam_messages: 1, ham_messages: 0 });
+    expect(await trainingCount()).toBe(1);
+  });
+});
+
+async function markOff(id: string, inboxId: string, from: string, subject: string, text: string, spam: boolean): Promise<void> {
+  await ready(id, inboxId, from, subject, text);
+  const route = spam ? "mark-spam" : "mark-not-spam";
+  const response = await api(`/v1/messages/${id}/${route}`, { method: "POST", body: "{}" }, workerEnv);
+  expect(response.status, id).toBe(200);
+}
+
+async function markLive(id: string, spam: boolean, executionEnv: Env): Promise<void> {
+  await ready(id, "inb_spam", spam ? SPAM_FROM : HAM_FROM, spam ? SPAM_SUBJECT : HAM_SUBJECT, SPAM_TEXT);
+  const route = spam ? "mark-spam" : "mark-not-spam";
+  const response = await api(`/v1/messages/${id}/${route}`, { method: "POST", body: "{}" }, executionEnv);
+  expect(response.status, id).toBe(200);
+}
+
+async function backfill(
+  body: { limit?: number; cursor?: string } = {},
+  executionEnv: Env = learnEnv,
+): Promise<{
+  status: number;
+  inbox_id: string;
+  trained: number;
+  unchanged: number;
+  skipped: number;
+  done: boolean;
+  next_cursor: string | null;
+}> {
+  const response = await api("/v1/inboxes/inb_spam/spam-training", {
+    method: "POST",
+    body: JSON.stringify(body),
+  }, executionEnv);
+  const payload = await response.json() as { data?: {
+    inbox_id: string;
+    trained: number;
+    unchanged: number;
+    skipped: number;
+    done: boolean;
+    next_cursor: string | null;
+  } };
+  return { status: response.status, ...payload.data! };
+}
+
+async function trainingLabel(messageId: string): Promise<string | null> {
+  const row = await env.DB.prepare(
+    "SELECT label FROM message_spam_training WHERE message_id = ?",
+  ).bind(messageId).first<{ label: string }>();
+  return row?.label ?? null;
+}
+
+async function trainingCountFor(inboxId: string): Promise<number> {
+  const row = await env.DB.prepare(
+    "SELECT COUNT(*) AS count FROM message_spam_training WHERE inbox_id = ?",
+  ).bind(inboxId).first<{ count: number }>();
+  return Number(row?.count ?? 0);
+}
 
 async function markClass(label: "spam" | "ham", prefix: string, count: number): Promise<void> {
   const subject = label === "spam" ? SPAM_SUBJECT : HAM_SUBJECT;

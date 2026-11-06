@@ -62,12 +62,15 @@ describe("message list CLI filters", () => {
       expect(cleared.code).toBe(0);
       const training = await invoke(url, ["messages", "training", "--inbox", "inb_home"]);
       expect(training.code).toBe(0);
+      const backfill = await invoke(url, ["messages", "training-backfill", "--inbox", "inb_home", "--limit", "2", "--cursor", "msg_9"]);
+      expect(backfill.code).toBe(0);
       expect(seen.map((entry) => ({ method: entry.method, url: entry.url.split("?")[0], query: new URL(entry.url, url).searchParams.get("folder"), body: entry.body }))).toEqual([
         { method: "GET", url: "/v1/messages", query: "spam", body: "" },
         { method: "GET", url: "/v1/messages", query: "all", body: "" },
         { method: "POST", url: "/v1/messages/msg_1/mark-spam", query: null, body: JSON.stringify({ also_block_sender: true, also_block_domain: true }) },
         { method: "POST", url: "/v1/messages/msg_1/mark-not-spam", query: null, body: JSON.stringify({ also_allow_sender: true }) },
         { method: "GET", url: "/v1/inboxes/inb_home/spam-training", query: null, body: "" },
+        { method: "POST", url: "/v1/inboxes/inb_home/spam-training", query: null, body: JSON.stringify({ limit: 2, cursor: "msg_9" }) },
       ]);
     });
   });

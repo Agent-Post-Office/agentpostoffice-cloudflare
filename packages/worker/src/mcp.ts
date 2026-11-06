@@ -166,6 +166,13 @@ function operationsFor(auth: AuthContext, env: Env): McpOperations {
       body: options,
     })).data,
     getSpamTraining: async (inboxId) => (await callApi(auth, env, `/v1/inboxes/${pathId(inboxId)}/spam-training`)).data,
+    backfillSpamTraining: async (inboxId, options) => (await callApi(auth, env, `/v1/inboxes/${pathId(inboxId)}/spam-training`, {
+      method: "POST",
+      body: {
+        ...(options.limit !== undefined ? { limit: options.limit } : {}),
+        ...(options.cursor !== undefined ? { cursor: options.cursor } : {}),
+      },
+    })).data,
     sendMessage: async (input, idempotencyKey) => (await callApi(auth, env, "/v1/messages", {
       method: "POST",
       headers: { "Idempotency-Key": idempotencyKey },

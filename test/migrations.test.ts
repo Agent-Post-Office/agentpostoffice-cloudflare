@@ -78,6 +78,14 @@ describe("archive and thread-list migrations", () => {
     expect(readme).toContain("SPAM_LEARN_MIN");
     expect(readme).toContain("bayes_spam_0.97");
     expect(readme).toContain("messages training");
+    expect(readme).toContain("Set `SPAM_LEARN` to `on`");
+    expect(readme).toContain("messages training-backfill");
+    expect(readme).toContain("backfill_spam_training");
+    expect(upgrading).toContain("Apply 0007, then 0008, then deploy, then backfill.");
+    expect(upgrading).toContain("messages training-backfill");
+    const example = readFileSync("packages/worker/wrangler.jsonc.example", "utf8");
+    expect(example).toContain('"SPAM_LEARN": "off"');
+    expect(example).toContain('Set it to "on"');
   });
 });
 

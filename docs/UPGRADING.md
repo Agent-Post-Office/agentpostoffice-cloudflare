@@ -35,9 +35,19 @@ DELETE FROM d1_migrations WHERE name = '0007_message_spam.sql';
 
 If `DROP COLUMN` is rejected, stop and leave the columns. The older Worker already tolerates them. Do not delete rows from `messages` to undo this migration.
 
-`0008_spam_learn.sql` is an additive expansion. Apply it after `0007`. It adds `inbox_spam_class_counts`, `inbox_spam_token_counts`, and `message_spam_training`. It does not alter `messages`, backfill scores, or copy existing marks into the model. With `SPAM_LEARN` unset or `off`, inbound scoring stays on the rules filter and mark routes do not write these tables. `GET /v1/inboxes/{inbox_id}/spam-training` returns HTTP 503 `migration_pending` with `spam training requires migration 0008` until this migration is applied. That route needs `messages:update`. Marks, folder filters, and rules scoring keep working from `0007` alone. Turning `SPAM_LEARN` on before `0008` keeps the rules score: a missing count table fails open and does not drop mail.
+`0008_spam_learn.sql` is an additive expansion. Apply it after `0007`. It adds `inbox_spam_class_counts`, `inbox_spam_token_counts`, and `message_spam_training`. It does not alter `messages` or backfill scores. The migration itself does not copy existing marks.
 
-Deploy the Worker after `0008` when the operator wants learned scoring. Leaving `SPAM_LEARN` off after the migration is safe. Rolling the Worker back to the pre-learn release does not remove the new tables. That release never reads them, so leaving `0008` in place is the safe rollback. It does not change message rows.
+Apply 0007, then 0008, then deploy, then backfill. Set `SPAM_LEARN` to `on` in that instance when it should learn. The code default and `packages/worker/wrangler.jsonc.example` stay `off` for other self-hosters. After the Worker is deployed, backfill each inbox that already has mark-spam or mark-not-spam marks, including marks made while `SPAM_LEARN` was off:
+
+```bash
+node packages/cli/dist/index.js messages training-backfill --inbox <inbox-id>
+```
+
+Repeat with `--cursor <next_cursor>` until `done` is true. Each call trains one page (default 25, maximum 100) and needs `messages:update`. `POST /v1/inboxes/{inbox_id}/spam-training` and the MCP tool `backfill_spam_training` do the same page. A message already in `message_spam_training` is unchanged. A mark flipped before the backfill counts once, in its final class. An unreadable raw message is skipped and counted. The first inbound message after `SPAM_LEARN` is on also runs one page when that inbox has no training rows and no class-count row. That lazy pass does not continue through later pages. Use the command to finish a larger inbox.
+
+With `SPAM_LEARN` unset or `off`, inbound scoring stays on the rules filter and mark routes do not write these tables. The backfill can still record counts; scoring ignores them until `SPAM_LEARN` is on. `GET` and `POST /v1/inboxes/{inbox_id}/spam-training` return HTTP 503 `migration_pending` with `spam training requires migration 0008` until this migration is applied. Those routes need `messages:update`. Marks, folder filters, and rules scoring keep working from `0007` alone. Turning `SPAM_LEARN` on before `0008` keeps the rules score: a missing count table fails open and does not drop mail.
+
+Deploy the Worker after `0008` when the operator wants learned scoring, then run the backfill. Leaving `SPAM_LEARN` off after the migration is safe. Rolling the Worker back to the pre-learn release does not remove the new tables. That release never reads them, so leaving `0008` in place is the safe rollback. It does not change message rows.
 
 Reverting the schema is a separate, destructive step and is not a down migration in this repository. Deploy the older Worker first, then drop only the learn objects. This discards trained counts. It does not delete message rows.
 

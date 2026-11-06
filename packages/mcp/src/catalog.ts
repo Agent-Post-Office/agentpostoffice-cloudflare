@@ -65,6 +65,7 @@ export interface McpOperations {
   markSpam(id: string, options: { also_block_sender?: boolean; also_block_domain?: boolean }): Promise<unknown>;
   markNotSpam(id: string, options: { also_allow_sender?: boolean; also_allow_domain?: boolean }): Promise<unknown>;
   getSpamTraining(inboxId: string): Promise<unknown>;
+  backfillSpamTraining(inboxId: string, options: { limit?: number; cursor?: string }): Promise<unknown>;
   sendMessage(input: { inbox_id: string; to: string; subject: string; text: string }, idempotencyKey: string): Promise<unknown>;
   reply(id: string, input: { text: string }, idempotencyKey: string): Promise<unknown>;
   deleteMessage(id: string): Promise<unknown>;
@@ -205,6 +206,16 @@ export const sharedTools: readonly SharedToolDefinition[] = [
     description: "Show per-inbox naive Bayes training counts learned from mark_spam and mark_not_spam. Requires messages:update. Does not change mail.",
     scope: "messages:update",
     inputSchema: { inbox_id: z.string() },
+  },
+  {
+    name: "backfill_spam_training",
+    description: "Train naive Bayes from existing mark_spam and mark_not_spam marks for one inbox, one page per call. Requires messages:update. Does not drop mail.",
+    scope: "messages:update",
+    inputSchema: {
+      inbox_id: z.string(),
+      limit: z.number().int().min(1).max(100).optional(),
+      cursor: z.string().min(1).max(128).optional(),
+    },
   },
   {
     name: "send_message",
@@ -351,6 +362,11 @@ export async function executeSharedTool(name: string, args: Record<string, unkno
       }));
     case "get_spam_training":
       return output(await ops.getSpamTraining(requiredString(args, "inbox_id")));
+    case "backfill_spam_training":
+      return output(await ops.backfillSpamTraining(requiredString(args, "inbox_id"), {
+        limit: optionalNumber(args, "limit"),
+        cursor: optionalString(args, "cursor"),
+      }));
     case "send_message":
       return output(await ops.sendMessage({
         inbox_id: requiredString(args, "inbox_id"),

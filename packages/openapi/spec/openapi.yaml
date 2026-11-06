@@ -112,6 +112,25 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "200": { description: Training counts for one inbox, content: { application/json: { schema: { type: object, properties: { data: { type: object, properties: { inbox_id: { type: string }, spam_messages: { type: integer }, ham_messages: { type: integer }, tokens: { type: integer }, min_marks: { type: integer }, learning: { type: boolean }, ready: { type: boolean } } } } } } } }
         "4XX": { $ref: "#/components/responses/ClientError" }
+    post:
+      summary: Backfill spam training from existing operator marks
+      operationId: backfillSpamTraining
+      x-required-scopes: ["messages:update"]
+      description: Requires messages:update, the same scope as mark-spam and mark-not-spam. Trains one page of messages this inbox already marked spam or not-spam, including marks made while SPAM_LEARN was off. A message already trained is unchanged. A flipped mark counts once, in its final class. An unreadable message is skipped. Repeat with next_cursor until done. limit defaults to 25 and cannot exceed 100.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                limit: { type: integer, minimum: 1, maximum: 100 }
+                cursor: { type: string, maxLength: 128 }
+      responses:
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "200": { description: One backfill page, content: { application/json: { schema: { type: object, properties: { data: { type: object, properties: { inbox_id: { type: string }, trained: { type: integer }, unchanged: { type: integer }, skipped: { type: integer }, done: { type: boolean }, next_cursor: { type: [string, "null"] } } } } } } } }
+        "4XX": { $ref: "#/components/responses/ClientError" }
   /inboxes/{inbox_id}/sieve:
     parameters:
       - $ref: "#/components/parameters/InboxId"

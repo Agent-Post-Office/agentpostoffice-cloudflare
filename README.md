@@ -372,9 +372,11 @@ curl -sS -X POST https://agentpostoffice.example.workers.dev/v1/messages/msg_123
   --data '{"also_block_sender":true}'
 ```
 
-`SPAM_LEARN` is `on`, `true`, or `1` to train a per-inbox naive Bayes model from those marks. Unset, `off`, `0`, and `false` leave scoring byte-for-byte on the rules above, and marks do not change token counts. Each mark stores one training row. Marking the same message again does not add the tokens a second time. Flipping spam to not-spam, or back, moves the counts once. The model reads the subject, the decoded text body, the sender domain, and URL hosts. It stays quiet until the inbox has `SPAM_LEARN_MIN` marks in each class (default 20). After that, a spam posterior of at least 0.90 adds one signal, `bayes_spam_0.97` for a posterior of 0.97. The points scale from 0 at 0.90 to a cap of 52 at 1.00. 52 is the default threshold minus the smallest other positive weight (8), so Bayes alone stays ham and Bayes plus any one other content or authentication signal reaches 60. A ham posterior adds nothing, so learning cannot hide a rules hit. If the classifier or its count tables fail, parsing keeps the rules score. Mail is still never dropped.
+`SPAM_LEARN` is `on`, `true`, or `1` to train a per-inbox naive Bayes model from those marks. Unset, `off`, `0`, and `false` leave scoring byte-for-byte on the rules above, and the mark routes do not change token counts. Set `SPAM_LEARN` to `on` in the Worker vars when this instance should learn. `packages/worker/wrangler.jsonc.example` keeps the value `off` so other self-hosters stay on the rules filter. Each mark stores one training row. Marking the same message again does not add the tokens a second time. Flipping spam to not-spam, or back, moves the counts once. The model reads the subject, the decoded text body, the sender domain, and URL hosts. It stays quiet until the inbox has `SPAM_LEARN_MIN` marks in each class (default 20). After that, a spam posterior of at least 0.90 adds one signal, `bayes_spam_0.97` for a posterior of 0.97. The points scale from 0 at 0.90 to a cap of 52 at 1.00. 52 is the default threshold minus the smallest other positive weight (8), so Bayes alone stays ham and Bayes plus any one other content or authentication signal reaches 60. A ham posterior adds nothing, so learning cannot hide a rules hit. If the classifier or its count tables fail, parsing keeps the rules score. Mail is still never dropped.
 
 `GET /v1/inboxes/{inbox_id}/spam-training` requires `messages:update` and returns `spam_messages`, `ham_messages`, `tokens`, `min_marks`, `learning`, and `ready`. It does not change mail. Until migration `0008` is applied that route returns HTTP 503 `migration_pending`. Marks and rules scoring still work from `0007`.
+
+`POST /v1/inboxes/{inbox_id}/spam-training` backfills marks that already exist, including marks made while `SPAM_LEARN` was off. It needs the same `messages:update` scope. Each call trains one page (`limit` defaults to 25 and cannot exceed 100). Repeat with `cursor` set to `next_cursor` until `done` is true. A message already in `message_spam_training` is unchanged, so a second run does not count it again. A mark flipped before the backfill counts once, in its final class. An unreadable raw message is skipped and counted, and the rest of the page still trains. Scoring ignores those counts until `SPAM_LEARN` is on. The first inbound message after `SPAM_LEARN` is on also runs one page when that inbox has no training rows and no class-count row. That pass does not loop. Use this endpoint to finish a larger inbox.
 
 ```bash
 curl -sS https://agentpostoffice.example.workers.dev/v1/inboxes/inb_example/spam-training \
@@ -392,9 +394,10 @@ node packages/cli/dist/index.js messages unarchive <message-id>
 node packages/cli/dist/index.js messages spam <message-id> --block-sender
 node packages/cli/dist/index.js messages not-spam <message-id> --allow-sender
 node packages/cli/dist/index.js messages training --inbox <inbox-id>
+node packages/cli/dist/index.js messages training-backfill --inbox <inbox-id>
 ```
 
-`--unanswered` is an alias for `replied=false`. The CLI rejects it with `--direction outbound` before the request, matching the API's `400 invalid_filter` response. `--folder` is `inbox`, `spam`, or `all`. Omitting it uses the API default, which is inbox. `messages spam` and `messages not-spam` call the mark routes. `--block-sender`, `--block-domain`, `--allow-sender`, and `--allow-domain` map to the optional list edits and need `inboxes:manage` as well as `messages:update`. `messages training --inbox` calls `GET /v1/inboxes/{inbox_id}/spam-training` and needs `messages:update`.
+`--unanswered` is an alias for `replied=false`. The CLI rejects it with `--direction outbound` before the request, matching the API's `400 invalid_filter` response. `--folder` is `inbox`, `spam`, or `all`. Omitting it uses the API default, which is inbox. `messages spam` and `messages not-spam` call the mark routes. `--block-sender`, `--block-domain`, `--allow-sender`, and `--allow-domain` map to the optional list edits and need `inboxes:manage` as well as `messages:update`. `messages training --inbox` calls `GET /v1/inboxes/{inbox_id}/spam-training` and needs `messages:update`. `messages training-backfill --inbox` calls the backfill, one page per run, and accepts `--limit` and `--cursor`. Repeat it until `done` is true.
 
 Send and reply requests require an `Idempotency-Key`. Reusing the key with different content returns a conflict; once an attempt begins, that key never sends again.
 
@@ -503,7 +506,7 @@ Message output is labeled `untrusted_content: true`. `get_attachment` returns on
 | --- | --- |
 | `list_inboxes` | `messages:read` |
 | `poll_messages`, `get_message`, `get_message_html`, `get_attachment_metadata`, `get_attachment` | `messages:read` |
-| `acknowledge_message`, `set_message_archived`, `mark_spam`, `mark_not_spam`, `get_spam_training` | `messages:update` |
+| `acknowledge_message`, `set_message_archived`, `mark_spam`, `mark_not_spam`, `get_spam_training`, `backfill_spam_training` | `messages:update` |
 | `reply_to_message` | `messages:reply` |
 | `send_message` | `messages:send` |
 | `delete_message`, `delete_messages` | `messages:delete` |
