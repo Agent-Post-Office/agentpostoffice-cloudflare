@@ -141,6 +141,7 @@ function operationsFor(auth: AuthContext, env: Env): McpOperations {
       if (options.replied !== undefined) query.set("replied", options.replied ? "true" : "false");
       if (options.threadId) query.set("thread_id", options.threadId);
       if (options.archived !== undefined) query.set("archived", options.archived ? "true" : "false");
+      if (options.folder) query.set("folder", options.folder);
       if (options.order) query.set("order", options.order);
       if (options.limit) query.set("limit", String(options.limit));
       if (options.cursor) query.set("cursor", options.cursor);
@@ -155,6 +156,14 @@ function operationsFor(auth: AuthContext, env: Env): McpOperations {
     updateMessage: async (id, update) => (await callApi(auth, env, `/v1/messages/${pathId(id)}`, {
       method: "PATCH",
       body: update,
+    })).data,
+    markSpam: async (id, options) => (await callApi(auth, env, `/v1/messages/${pathId(id)}/mark-spam`, {
+      method: "POST",
+      body: options,
+    })).data,
+    markNotSpam: async (id, options) => (await callApi(auth, env, `/v1/messages/${pathId(id)}/mark-not-spam`, {
+      method: "POST",
+      body: options,
     })).data,
     sendMessage: async (input, idempotencyKey) => (await callApi(auth, env, "/v1/messages", {
       method: "POST",

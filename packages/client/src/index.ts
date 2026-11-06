@@ -45,6 +45,8 @@ export interface Message {
   replied_at: string | null;
   last_reply_message_id: string | null;
   archived_at: string | null;
+  folder?: "inbox" | "spam";
+  spam?: { verdict: "spam" | "ham" | null; score: number | null; reasons: string[] };
   from: { address: string };
   to: { address: string };
   subject: string | null;
@@ -70,6 +72,7 @@ export interface ListMessageOptions {
   replied?: boolean;
   threadId?: string;
   archived?: boolean;
+  folder?: "inbox" | "spam" | "all";
   since?: string;
   until?: string;
   order?: "asc" | "desc";
@@ -173,6 +176,7 @@ export class AgentPostOfficeClient {
     if (options.replied !== undefined) query.set("replied", options.replied ? "true" : "false");
     if (options.threadId) query.set("thread_id", options.threadId);
     if (options.archived !== undefined) query.set("archived", options.archived ? "true" : "false");
+    if (options.folder) query.set("folder", options.folder);
     if (options.since) query.set("since", options.since);
     if (options.until) query.set("until", options.until);
     if (options.order) query.set("order", options.order);
@@ -191,6 +195,20 @@ export class AgentPostOfficeClient {
     return (await this.request<{ data: unknown }>(`/v1/messages/${encodeURIComponent(id)}`, {
       method: "PATCH",
       body: JSON.stringify(update),
+    })).data;
+  }
+
+  async markSpam(id: string, options: { also_block_sender?: boolean; also_block_domain?: boolean } = {}): Promise<unknown> {
+    return (await this.request<{ data: unknown }>(`/v1/messages/${encodeURIComponent(id)}/mark-spam`, {
+      method: "POST",
+      body: JSON.stringify(options),
+    })).data;
+  }
+
+  async markNotSpam(id: string, options: { also_allow_sender?: boolean; also_allow_domain?: boolean } = {}): Promise<unknown> {
+    return (await this.request<{ data: unknown }>(`/v1/messages/${encodeURIComponent(id)}/mark-not-spam`, {
+      method: "POST",
+      body: JSON.stringify(options),
     })).data;
   }
 

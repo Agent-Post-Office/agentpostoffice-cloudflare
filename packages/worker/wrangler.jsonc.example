@@ -11,7 +11,12 @@
     "MAIL_DOMAIN": "mail.example.com",
     "MAX_INBOUND_BYTES": "10485760",
     "BODY_EXCERPT_BYTES": "8192",
-    "DLQ_NAME": "agentpostoffice-dlq"
+    "DLQ_NAME": "agentpostoffice-dlq",
+    // off leaves mail in inbox and still stores a score. tag adds the spam label.
+    // quarantine moves flagged mail to the spam folder. Mail is never dropped.
+    // SPAM_THRESHOLD is 0-100. inbox_spam_settings overrides both per inbox.
+    "SPAM_FILTER": "tag",
+    "SPAM_THRESHOLD": "60"
   },
   "d1_databases": [
     {

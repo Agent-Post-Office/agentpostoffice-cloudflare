@@ -89,6 +89,22 @@ function base64UrlDecode(value: string): string {
   return new TextDecoder().decode(Uint8Array.from(binary, (character) => character.charCodeAt(0)));
 }
 
+export function errorMentionsMissingSchema(error: unknown, name: string): boolean {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return false;
+  const pending = new RegExp(`no such (?:column|table):\\s*(?:\\w+\\.)?${name}\\b`, "i");
+  const seen = new Set<unknown>();
+  let current: unknown = error;
+  while (current && !seen.has(current)) {
+    seen.add(current);
+    if (typeof current === "string") return pending.test(current);
+    if (typeof current !== "object") return false;
+    const record = current as { message?: unknown; cause?: unknown };
+    if (typeof record.message === "string" && pending.test(record.message)) return true;
+    current = record.cause;
+  }
+  return false;
+}
+
 export function parseJsonArray(value: string): unknown[] {
   try {
     const parsed = JSON.parse(value) as unknown;

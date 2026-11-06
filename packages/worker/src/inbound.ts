@@ -111,7 +111,7 @@ export async function handleInbound(message: ForwardableEmailMessage, env: Env):
 function selectedHeaders(headers: Headers): Record<string, string> {
   const selected: Record<string, string> = {};
   for (const name of [
-    "message-id", "in-reply-to", "references", "reply-to", "date", "auto-submitted", "precedence",
+    "message-id", "in-reply-to", "references", "reply-to", "date", "authentication-results", "auto-submitted", "precedence",
     "list-id", "list-help", "list-subscribe", "list-unsubscribe", "list-post", "list-owner", "list-archive",
   ]) {
     const value = headers.get(name);
