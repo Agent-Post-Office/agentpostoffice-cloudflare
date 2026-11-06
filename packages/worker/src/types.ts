@@ -43,6 +43,10 @@ export interface Env {
   SPAM_FILTER?: string;
   /** Integer 0-100. Unset means 60. */
   SPAM_THRESHOLD?: string;
+  /** on trains per-inbox naive Bayes from marks. Unset, off, 0, and false leave scoring unchanged. */
+  SPAM_LEARN?: string;
+  /** Marks required in each class before Bayes counts. Unset means 20. */
+  SPAM_LEARN_MIN?: string;
 }
 
 export type QueueTask =

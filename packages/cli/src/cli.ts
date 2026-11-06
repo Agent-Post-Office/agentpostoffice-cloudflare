@@ -138,6 +138,13 @@ async function runMessages(client: AgentPostOfficeClient, action: string | undef
       also_allow_domain: flagBoolean(parsed, "allow-domain") || undefined,
     }));
   }
+  if (action === "training") return print(await client.spamTraining(flagString(parsed, "inbox", true)));
+  if (action === "training-backfill") {
+    return print(await client.backfillSpamTraining(flagString(parsed, "inbox", true), {
+      limit: optionalNumber(parsed, "limit"),
+      cursor: optionalString(parsed, "cursor"),
+    }));
+  }
   if (action === "delete" && ids[0]) {
     if (!flagBoolean(parsed, "yes")) throw new Error("Deletion requires --yes");
     return print(await client.deleteMessage(ids[0]));
@@ -161,7 +168,7 @@ async function runMessages(client: AgentPostOfficeClient, action: string | undef
     await saveResponse(await client.downloadAttachment(ids[0], ids[1]), output);
     return print({ saved: output, opened: false, untrusted_content: true });
   }
-  throw new Error("Usage: agentpostoffice messages <list|get|ack|unack|archive|unarchive|spam|not-spam|delete|bulk-delete|raw|attachment>");
+  throw new Error("Usage: agentpostoffice messages <list|get|ack|unack|archive|unarchive|spam|not-spam|training|training-backfill|delete|bulk-delete|raw|attachment>");
 }
 
 async function bodyText(parsed: ParsedArguments): Promise<string> {
@@ -297,10 +304,12 @@ function printHelp(): void {
   status
   inboxes list|get|create|enable|disable
   sieve list|validate|put|test|activate|disable
-  messages list|get|ack|unack|archive|unarchive|spam|not-spam|delete|bulk-delete|raw|attachment
+  messages list|get|ack|unack|archive|unarchive|spam|not-spam|training|training-backfill|delete|bulk-delete|raw|attachment
     list: --inbox --state --direction --replied --unanswered --thread --archived --unarchived --folder --since --until --order --limit --cursor
     spam <id>: --block-sender --block-domain
     not-spam <id>: --allow-sender --allow-domain
+    training: --inbox ID
+    training-backfill: --inbox ID [--limit N] [--cursor ID]
   send --inbox ID --to ADDRESS --subject TEXT --text TEXT
   reply MESSAGE_ID --text TEXT
 

@@ -12,6 +12,7 @@ describe("archive and thread-list migrations", () => {
       "0005_message_archived.sql",
       "0006_message_thread_feed.sql",
       "0007_message_spam.sql",
+      "0008_spam_learn.sql",
     ]);
 
     const column = statements("packages/worker/migrations/0005_message_archived.sql");
@@ -32,6 +33,12 @@ describe("archive and thread-list migrations", () => {
     expect(spam).toContain("messages_open_inbox_feed_idx");
     expect(spam).toContain("messages_open_spam_feed_idx");
     expect(spam).not.toMatch(/\b(UPDATE|DELETE|DROP)\b/i);
+
+    const learn = statements("packages/worker/migrations/0008_spam_learn.sql");
+    expect(learn).toContain("CREATE TABLE inbox_spam_class_counts");
+    expect(learn).toContain("CREATE TABLE inbox_spam_token_counts");
+    expect(learn).toContain("CREATE TABLE message_spam_training");
+    expect(learn).not.toMatch(/\b(UPDATE|DELETE|DROP|ALTER TABLE messages)\b/i);
   });
 
   it("documents that archive routes need 0005 and the default feed does not", () => {
@@ -61,6 +68,24 @@ describe("archive and thread-list migrations", () => {
     expect(upgrading).toContain("does not backfill scores");
     expect(upgrading).toContain("DROP TABLE IF EXISTS inbox_spam_rules");
     expect(upgrading).toContain("DELETE FROM d1_migrations WHERE name = '0007_message_spam.sql'");
+    expect(upgrading).toContain("0008_spam_learn.sql");
+    expect(upgrading).toContain("spam training requires migration 0008");
+    expect(upgrading).toContain("DROP TABLE IF EXISTS message_spam_training");
+    expect(upgrading).toContain("DROP TABLE IF EXISTS inbox_spam_token_counts");
+    expect(upgrading).toContain("DROP TABLE IF EXISTS inbox_spam_class_counts");
+    expect(upgrading).toContain("DELETE FROM d1_migrations WHERE name = '0008_spam_learn.sql'");
+    expect(readme).toContain("SPAM_LEARN");
+    expect(readme).toContain("SPAM_LEARN_MIN");
+    expect(readme).toContain("bayes_spam_0.97");
+    expect(readme).toContain("messages training");
+    expect(readme).toContain("Set `SPAM_LEARN` to `on`");
+    expect(readme).toContain("messages training-backfill");
+    expect(readme).toContain("backfill_spam_training");
+    expect(upgrading).toContain("Apply 0007, then 0008, then deploy, then backfill.");
+    expect(upgrading).toContain("messages training-backfill");
+    const example = readFileSync("packages/worker/wrangler.jsonc.example", "utf8");
+    expect(example).toContain('"SPAM_LEARN": "off"');
+    expect(example).toContain('Set it to "on"');
   });
 });
 

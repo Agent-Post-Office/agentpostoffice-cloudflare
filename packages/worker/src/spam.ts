@@ -1,3 +1,4 @@
+import { bayesContribution, type BayesSignal } from "./spam-bayes.js";
 import { normalizeAddress, normalizeDomain } from "./util.js";
 
 export const DEFAULT_SPAM_MODE = "tag" as const;
@@ -23,6 +24,8 @@ export interface SpamScoreInput {
   recipientDomain: string;
   lists: SpamLists;
   threshold: number;
+  // Omitted, null, or a null probability leaves the rules score unchanged.
+  bayes?: BayesSignal | null;
 }
 
 export interface SpamAssessment {
@@ -154,6 +157,10 @@ export function scoreSpam(input: SpamScoreInput): SpamAssessment {
   if (verification && domain !== null && FREEMAIL_DOMAINS.has(domain)) add(CONTENT_RULE_WEIGHTS.freemail_verification, "freemail_verification");
   if (verification && text.trim().length === 0) add(CONTENT_RULE_WEIGHTS.empty_verification_body, "empty_verification_body");
 
+  // Weight choice lives on BAYES_CAP in spam-bayes.ts. Absent input adds nothing.
+  const learned = bayesContribution(input.bayes?.spamProbability);
+  if (learned.points > 0 && learned.reason) add(learned.points, learned.reason);
+
   const bounded = Math.min(100, score);
   return { score: bounded, reasons, verdict: verdictForScore(bounded, input.threshold) };
 }
@@ -197,6 +204,19 @@ export function withOperatorMark(value: string | null | undefined): string[] {
   const reasons = parseReasonList(value);
   if (!reasons.includes("operator_mark")) reasons.push("operator_mark");
   return reasons;
+}
+
+// The mark routes record a class as this triple: operator_mark, the verdict, and the folder.
+// A flipped mark keeps only the final triple. Auto-scored mail has no operator_mark.
+export function operatorMarkLabel(message: {
+  folder?: string | null;
+  spam_verdict?: string | null;
+  spam_reasons_json?: string | null;
+}): "spam" | "ham" | null {
+  if (!parseReasonList(message.spam_reasons_json).includes("operator_mark")) return null;
+  if (message.spam_verdict === "spam" && message.folder === "spam") return "spam";
+  if (message.spam_verdict === "ham" && message.folder === "inbox") return "ham";
+  return null;
 }
 
 export function mergeAuthenticationResults(

@@ -205,6 +205,20 @@ export class AgentPostOfficeClient {
     })).data;
   }
 
+  async spamTraining(inboxId: string): Promise<unknown> {
+    return (await this.request<{ data: unknown }>(`/v1/inboxes/${encodeURIComponent(inboxId)}/spam-training`)).data;
+  }
+
+  async backfillSpamTraining(inboxId: string, options: { limit?: number; cursor?: string } = {}): Promise<unknown> {
+    const body: { limit?: number; cursor?: string } = {};
+    if (options.limit !== undefined) body.limit = options.limit;
+    if (options.cursor !== undefined) body.cursor = options.cursor;
+    return (await this.request<{ data: unknown }>(`/v1/inboxes/${encodeURIComponent(inboxId)}/spam-training`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    })).data;
+  }
+
   async markNotSpam(id: string, options: { also_allow_sender?: boolean; also_allow_domain?: boolean } = {}): Promise<unknown> {
     return (await this.request<{ data: unknown }>(`/v1/messages/${encodeURIComponent(id)}/mark-not-spam`, {
       method: "POST",
