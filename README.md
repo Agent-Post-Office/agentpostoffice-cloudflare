@@ -131,6 +131,14 @@ No script is installed or activated by default. The included installation-welcom
 
 TDD is mandatory for new behavior; see [AGENTS.md](./AGENTS.md).
 
+## Spam filter
+
+Inbound mail is scored from 0 to 100 while it is parsed. A score greater than or equal to the threshold is spam. The default threshold is 60. The filter never drops or deletes mail, and scoring fails open.
+
+`SPAM_FILTER`, `SPAM_THRESHOLD`, `SPAM_LEARN`, and `SPAM_LEARN_MIN` are Worker variables for the whole instance. Block and allow rules, and an optional mode or threshold override, belong to one inbox. [Spam filter configuration](./docs/spam-filter.md) lists each setting.
+
+The scoring core is being published as a standalone Apache-2.0 package at https://github.com/Agent-Post-Office/agent-post-office-spam-filter.
+
 ## Configure Cloudflare application resources
 
 Do not run this against an account until you have reviewed [docs/INSTALL.md](./docs/INSTALL.md) and [docs/PHASE-0.md](./docs/PHASE-0.md).
@@ -348,7 +356,7 @@ curl -sS -X PATCH https://agentpostoffice.example.workers.dev/v1/messages/msg_12
 
 Spam is a folder, separate from archive. `folder=inbox|spam|all` selects it. The default feed uses inbox, so spam-folder messages stay out until the caller asks for them. `GET /v1/messages/{id}` still returns a spam-folder message, including `folder` and `spam` (`verdict`, `score`, `reasons`).
 
-Inbound mail is scored while it is parsed. `SPAM_FILTER` is `off`, `tag`, or `quarantine` (default `tag`). `SPAM_THRESHOLD` is an integer from 0 to 100 (default `60`). A score greater than or equal to the threshold is spam: with the default, 59 is ham and 60 is spam. Each content signal is at most 19 points, so one signal plus a DMARC failure (40) stays at 59. Flagging needs several signals to agree. `tag` adds the `spam` label and leaves the message in inbox. `quarantine` moves it to the spam folder and adds the same label. `off` stores the score and verdict and does not label, move, or change Sieve. This filter never drops or rejects mail, and it never calls `setReject`. If scoring throws, parsing fails open: the message stays stored, the score columns stay empty, and Sieve still runs. `Authentication-Results` is stored from new deliveries onward. A passing result does not by itself mark mail as spam or as not spam. A missing or unreadable authentication header adds no points. A row in `inbox_spam_settings` overrides the two variables for one inbox (`mode`, `threshold`; a null column inherits the deployment value).
+Inbound mail is scored while it is parsed. Instance variables and per-inbox overrides are listed in [Spam filter](./docs/spam-filter.md). `SPAM_FILTER` is `off`, `tag`, or `quarantine` (default `tag`). `SPAM_THRESHOLD` is an integer from 0 to 100 (default `60`). A score greater than or equal to the threshold is spam: with the default, 59 is ham and 60 is spam. Each content signal is at most 19 points, so one signal plus a DMARC failure (40) stays at 59. Flagging needs several signals to agree. `tag` adds the `spam` label and leaves the message in inbox. `quarantine` moves it to the spam folder and adds the same label. `off` stores the score and verdict and does not label, move, or change Sieve. This filter never drops or rejects mail, and it never calls `setReject`. If scoring throws, parsing fails open: the message stays stored, the score columns stay empty, and Sieve still runs. `Authentication-Results` is stored from new deliveries onward. A passing result does not by itself mark mail as spam or as not spam. A missing or unreadable authentication header adds no points. A row in `inbox_spam_settings` overrides the two variables for one inbox (`mode`, `threshold`; a null column inherits the deployment value).
 
 List checks run in this order: sender block, sender allow, domain block, domain allow, then the heuristics. A sender on both the allow list and the block list is spam (`block_sender`). An exact sender allow beats a domain block. An exact sender block beats a domain allow. Domain rules match case-insensitively and include subdomains, so `Example.COM` matches `a@example.com` and `a@sub.example.com`.
 
