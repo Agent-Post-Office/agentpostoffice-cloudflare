@@ -1,3 +1,4 @@
+import { bayesContribution, type BayesSignal } from "./spam-bayes.js";
 import { normalizeAddress, normalizeDomain } from "./util.js";
 
 export const DEFAULT_SPAM_MODE = "tag" as const;
@@ -23,6 +24,8 @@ export interface SpamScoreInput {
   recipientDomain: string;
   lists: SpamLists;
   threshold: number;
+  // Omitted, null, or a null probability leaves the rules score unchanged.
+  bayes?: BayesSignal | null;
 }
 
 export interface SpamAssessment {
@@ -153,6 +156,10 @@ export function scoreSpam(input: SpamScoreInput): SpamAssessment {
   if (verification && URGENCY_NOTICE.test(subject)) add(CONTENT_RULE_WEIGHTS.urgency_notice, "urgency_notice");
   if (verification && domain !== null && FREEMAIL_DOMAINS.has(domain)) add(CONTENT_RULE_WEIGHTS.freemail_verification, "freemail_verification");
   if (verification && text.trim().length === 0) add(CONTENT_RULE_WEIGHTS.empty_verification_body, "empty_verification_body");
+
+  // Weight choice lives on BAYES_CAP in spam-bayes.ts. Absent input adds nothing.
+  const learned = bayesContribution(input.bayes?.spamProbability);
+  if (learned.points > 0 && learned.reason) add(learned.points, learned.reason);
 
   const bounded = Math.min(100, score);
   return { score: bounded, reasons, verdict: verdictForScore(bounded, input.threshold) };

@@ -165,6 +165,7 @@ function operationsFor(auth: AuthContext, env: Env): McpOperations {
       method: "POST",
       body: options,
     })).data,
+    getSpamTraining: async (inboxId) => (await callApi(auth, env, `/v1/inboxes/${pathId(inboxId)}/spam-training`)).data,
     sendMessage: async (input, idempotencyKey) => (await callApi(auth, env, "/v1/messages", {
       method: "POST",
       headers: { "Idempotency-Key": idempotencyKey },

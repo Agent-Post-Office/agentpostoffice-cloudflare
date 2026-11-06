@@ -112,8 +112,18 @@ describe("Agent Post Office MCP contract", () => {
     });
     expect(cleared.isError).not.toBe(true);
     expect(markNotSpam).toHaveBeenCalledWith("msg_1", { also_allow_sender: true, also_allow_domain: undefined });
+    const spamTraining = vi.fn(async () => ({ inbox_id: "inb_1", spam_messages: 0, ham_messages: 0 }));
     await client.close();
     await server.close();
+    const trainingServer = createAgentPostOfficeMcpServer({ spamTraining } as unknown as AgentPostOfficeClient);
+    const trainingClient = new Client({ name: "test", version: "1.0.0" });
+    const [trainingClientTransport, trainingServerTransport] = InMemoryTransport.createLinkedPair();
+    await Promise.all([trainingServer.connect(trainingServerTransport), trainingClient.connect(trainingClientTransport)]);
+    const training = await trainingClient.callTool({ name: "get_spam_training", arguments: { inbox_id: "inb_1" } });
+    expect(training.isError).not.toBe(true);
+    expect(spamTraining).toHaveBeenCalledWith("inb_1");
+    await trainingClient.close();
+    await trainingServer.close();
   });
 
   it("rejects an absolute download path outside the configured directory", async () => {

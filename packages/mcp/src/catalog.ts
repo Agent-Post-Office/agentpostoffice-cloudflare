@@ -64,6 +64,7 @@ export interface McpOperations {
   updateMessage(id: string, update: { state?: "processed" | "unprocessed"; archived?: boolean }): Promise<unknown>;
   markSpam(id: string, options: { also_block_sender?: boolean; also_block_domain?: boolean }): Promise<unknown>;
   markNotSpam(id: string, options: { also_allow_sender?: boolean; also_allow_domain?: boolean }): Promise<unknown>;
+  getSpamTraining(inboxId: string): Promise<unknown>;
   sendMessage(input: { inbox_id: string; to: string; subject: string; text: string }, idempotencyKey: string): Promise<unknown>;
   reply(id: string, input: { text: string }, idempotencyKey: string): Promise<unknown>;
   deleteMessage(id: string): Promise<unknown>;
@@ -198,6 +199,12 @@ export const sharedTools: readonly SharedToolDefinition[] = [
       also_allow_sender: z.boolean().optional(),
       also_allow_domain: z.boolean().optional(),
     },
+  },
+  {
+    name: "get_spam_training",
+    description: "Show per-inbox naive Bayes training counts learned from mark_spam and mark_not_spam. Requires messages:update. Does not change mail.",
+    scope: "messages:update",
+    inputSchema: { inbox_id: z.string() },
   },
   {
     name: "send_message",
@@ -342,6 +349,8 @@ export async function executeSharedTool(name: string, args: Record<string, unkno
         also_allow_sender: optionalBoolean(args, "also_allow_sender"),
         also_allow_domain: optionalBoolean(args, "also_allow_domain"),
       }));
+    case "get_spam_training":
+      return output(await ops.getSpamTraining(requiredString(args, "inbox_id")));
     case "send_message":
       return output(await ops.sendMessage({
         inbox_id: requiredString(args, "inbox_id"),

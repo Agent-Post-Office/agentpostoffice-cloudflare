@@ -16,7 +16,11 @@
     // quarantine moves flagged mail to the spam folder. Mail is never dropped.
     // SPAM_THRESHOLD is 0-100. inbox_spam_settings overrides both per inbox.
     "SPAM_FILTER": "tag",
-    "SPAM_THRESHOLD": "60"
+    "SPAM_THRESHOLD": "60",
+    // SPAM_LEARN defaults off. on trains per-inbox naive Bayes from marks.
+    // SPAM_LEARN_MIN is the marks required in each class before that signal counts.
+    "SPAM_LEARN": "off",
+    "SPAM_LEARN_MIN": "20"
   },
   "d1_databases": [
     {

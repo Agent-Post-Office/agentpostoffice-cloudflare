@@ -6,6 +6,7 @@ const spec = parse(readFileSync("packages/openapi/spec/openapi.yaml", "utf8"));
 const contract = [
   ["/inboxes", "get", "messages:read"], ["/inboxes", "post", "inboxes:manage"],
   ["/inboxes/{inbox_id}", "get", "messages:read"], ["/inboxes/{inbox_id}", "patch", "inboxes:manage"],
+  ["/inboxes/{inbox_id}/spam-training", "get", "messages:update"],
   ["/inboxes/{inbox_id}/sieve", "get", "sieve:read"],
   ["/inboxes/{inbox_id}/sieve", "post", "sieve:manage"],
   ["/inboxes/{inbox_id}/sieve", "delete", "sieve:manage"],

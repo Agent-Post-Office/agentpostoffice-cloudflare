@@ -39,6 +39,8 @@ const configuration = {
     AUTOMATION_DLQ_NAME: automationDlqName,
     SPAM_FILTER: "tag",
     SPAM_THRESHOLD: "60",
+    SPAM_LEARN: "off",
+    SPAM_LEARN_MIN: "20",
   },
   d1_databases: [{ binding: "DB", database_name: databaseName, database_id: databaseId, migrations_dir: "migrations" }],
   r2_buckets: [{ binding: "MAIL_BUCKET", bucket_name: bucketName }],

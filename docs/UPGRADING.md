@@ -35,6 +35,23 @@ DELETE FROM d1_migrations WHERE name = '0007_message_spam.sql';
 
 If `DROP COLUMN` is rejected, stop and leave the columns. The older Worker already tolerates them. Do not delete rows from `messages` to undo this migration.
 
+`0008_spam_learn.sql` is an additive expansion. Apply it after `0007`. It adds `inbox_spam_class_counts`, `inbox_spam_token_counts`, and `message_spam_training`. It does not alter `messages`, backfill scores, or copy existing marks into the model. With `SPAM_LEARN` unset or `off`, inbound scoring stays on the rules filter and mark routes do not write these tables. `GET /v1/inboxes/{inbox_id}/spam-training` returns HTTP 503 `migration_pending` with `spam training requires migration 0008` until this migration is applied. That route needs `messages:update`. Marks, folder filters, and rules scoring keep working from `0007` alone. Turning `SPAM_LEARN` on before `0008` keeps the rules score: a missing count table fails open and does not drop mail.
+
+Deploy the Worker after `0008` when the operator wants learned scoring. Leaving `SPAM_LEARN` off after the migration is safe. Rolling the Worker back to the pre-learn release does not remove the new tables. That release never reads them, so leaving `0008` in place is the safe rollback. It does not change message rows.
+
+Reverting the schema is a separate, destructive step and is not a down migration in this repository. Deploy the older Worker first, then drop only the learn objects. This discards trained counts. It does not delete message rows.
+
+```sql
+DROP INDEX IF EXISTS message_spam_training_inbox_idx;
+DROP INDEX IF EXISTS inbox_spam_token_counts_inbox_idx;
+DROP TABLE IF EXISTS message_spam_training;
+DROP TABLE IF EXISTS inbox_spam_token_counts;
+DROP TABLE IF EXISTS inbox_spam_class_counts;
+DELETE FROM d1_migrations WHERE name = '0008_spam_learn.sql';
+```
+
+Do not delete rows from `messages` to undo this migration.
+
 For each selected instance:
 
 1. Verify the existing Wrangler account, Worker name, domain, deployment version, and named configuration.

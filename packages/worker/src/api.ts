@@ -3,8 +3,9 @@ import { authenticate, requireScope } from "./auth.js";
 import { compileSieve, evaluateSieve, SieveValidationError } from "@agentpostoffice/sieve";
 import { errorResponse, HttpError, json, readJson, requireString } from "./http.js";
 import { replyToMessage, sendNew } from "./outbound.js";
+import { spamLearnEnabled } from "./spam-bayes.js";
 import { domainOf, labelsForSpamFolder, parseReasonList, withOperatorMark } from "./spam.js";
-import { spamListStatements } from "./spam-store.js";
+import { missingLearnSchema, planMessageTraining, readSpamTraining, spamListStatements } from "./spam-store.js";
 import type { AttachmentRow, AuthContext, Env, InboxRow, MessageRow, QueueTask } from "./types.js";
 import {
   decodeCursor,
@@ -124,6 +125,11 @@ async function routeInboxes(
   if (inboxId && segments[1] === "sieve") {
     await getInbox(inboxId, env);
     return routeSieve(request, inboxId, segments.slice(2), auth, env);
+  }
+  if (segments[0] && segments[1] === "spam-training" && segments.length === 2 && request.method === "GET") {
+    requireScope(auth, "messages:update");
+    await getInbox(segments[0], env);
+    return spamTrainingResponse(segments[0], env);
   }
   if (!inboxId || segments.length !== 1) throw new HttpError(404, "not_found", "Route not found");
   if (request.method === "GET") {
@@ -530,7 +536,17 @@ async function applySpamMark(messageId: string, auth: AuthContext, env: Env, mar
     && JSON.stringify(stringLabels(current.labels_json)) === JSON.stringify(nextLabels)
     && current.spam_verdict === (mark.spam ? "spam" : "ham")
     && JSON.stringify(parseReasonList(current.spam_reasons_json)) === JSON.stringify(nextReasons);
+  let training: D1PreparedStatement[] | null = null;
+  if (spamLearnEnabled(env)) {
+    try {
+      training = await planMessageTraining(env, current, mark.spam, nowIso());
+    } catch (error) {
+      if (!missingLearnSchema(error)) console.error("spam_train_failed", error instanceof Error ? error.name : "unknown");
+      training = null;
+    }
+  }
   if (!editsList && sameState) {
+    if (training && training.length > 0) await commitTraining(env, training);
     return json({
       data: {
         id: current.id,
@@ -571,6 +587,7 @@ async function applySpamMark(messageId: string, auth: AuthContext, env: Env, mar
     throw error;
   }
   if (!row) throw new HttpError(404, "not_found", "Message not found");
+  if (training && training.length > 0) await commitTraining(env, training);
   return json({
     data: {
       id: row.id,
@@ -581,6 +598,23 @@ async function applySpamMark(messageId: string, auth: AuthContext, env: Env, mar
       updated_at: row.updated_at,
     },
   });
+}
+
+async function commitTraining(env: Env, statements: D1PreparedStatement[]): Promise<void> {
+  try {
+    await env.DB.batch(statements);
+  } catch (error) {
+    if (!missingLearnSchema(error)) console.error("spam_train_failed", error instanceof Error ? error.name : "unknown");
+  }
+}
+
+async function spamTrainingResponse(inboxId: string, env: Env): Promise<Response> {
+  try {
+    return json({ data: await readSpamTraining(env, inboxId) });
+  } catch (error) {
+    if (missingLearnSchema(error)) throw new HttpError(503, "migration_pending", "spam training requires migration 0008");
+    throw error;
+  }
 }
 
 async function readOptionalObject(request: Request): Promise<Record<string, unknown>> {

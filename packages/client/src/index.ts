@@ -205,6 +205,10 @@ export class AgentPostOfficeClient {
     })).data;
   }
 
+  async spamTraining(inboxId: string): Promise<unknown> {
+    return (await this.request<{ data: unknown }>(`/v1/inboxes/${encodeURIComponent(inboxId)}/spam-training`)).data;
+  }
+
   async markNotSpam(id: string, options: { also_allow_sender?: boolean; also_allow_domain?: boolean } = {}): Promise<unknown> {
     return (await this.request<{ data: unknown }>(`/v1/messages/${encodeURIComponent(id)}/mark-not-spam`, {
       method: "POST",

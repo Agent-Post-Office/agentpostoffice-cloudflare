@@ -99,6 +99,19 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "200": { description: Updated mailbox, content: { application/json: { schema: { $ref: "#/components/schemas/InboxResponse" } } } }
         "4XX": { $ref: "#/components/responses/ClientError" }
+  /inboxes/{inbox_id}/spam-training:
+    parameters:
+      - $ref: "#/components/parameters/InboxId"
+    get:
+      summary: Show per-inbox spam training counts
+      operationId: getSpamTraining
+      x-required-scopes: ["messages:update"]
+      description: Requires messages:update, the same scope as mark-spam and mark-not-spam. Returns how many spam and ham marks this inbox has contributed to the naive Bayes model, how many token rows that produced, and whether learning is on and past the minimum. It does not change mail.
+      responses:
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "200": { description: Training counts for one inbox, content: { application/json: { schema: { type: object, properties: { data: { type: object, properties: { inbox_id: { type: string }, spam_messages: { type: integer }, ham_messages: { type: integer }, tokens: { type: integer }, min_marks: { type: integer }, learning: { type: boolean }, ready: { type: boolean } } } } } } } }
+        "4XX": { $ref: "#/components/responses/ClientError" }
   /inboxes/{inbox_id}/sieve:
     parameters:
       - $ref: "#/components/parameters/InboxId"
