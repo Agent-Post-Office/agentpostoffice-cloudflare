@@ -29,6 +29,8 @@ describe("archive and thread-list migrations", () => {
     expect(spam).toContain("ADD COLUMN spam_verdict TEXT");
     expect(spam).toContain("CREATE TABLE inbox_spam_settings");
     expect(spam).toContain("CREATE TABLE inbox_spam_rules");
+    expect(spam).toContain("messages_open_inbox_feed_idx");
+    expect(spam).toContain("messages_open_spam_feed_idx");
     expect(spam).not.toMatch(/\b(UPDATE|DELETE|DROP)\b/i);
   });
 
@@ -51,6 +53,14 @@ describe("archive and thread-list migrations", () => {
     expect(readme).toContain("SPAM_FILTER");
     expect(readme).toContain("SPAM_THRESHOLD");
     expect(readme).toContain("folder=inbox|spam|all");
+    expect(readme).toContain("score greater than or equal to the threshold");
+    expect(readme).toContain("block_sender");
+    expect(readme).toContain("--folder");
+    expect(readme).toContain("messages spam");
+    expect(upgrading).toContain("messages_open_inbox_feed_idx");
+    expect(upgrading).toContain("does not backfill scores");
+    expect(upgrading).toContain("DROP TABLE IF EXISTS inbox_spam_rules");
+    expect(upgrading).toContain("DELETE FROM d1_migrations WHERE name = '0007_message_spam.sql'");
   });
 });
 

@@ -127,7 +127,16 @@ export function scoreSpam(input: SpamScoreInput): SpamAssessment {
   if (verification && text.trim().length === 0) add(20, "empty_verification_body");
 
   const bounded = Math.min(100, score);
-  return { score: bounded, reasons, verdict: bounded >= input.threshold ? "spam" : "ham" };
+  return { score: bounded, reasons, verdict: verdictForScore(bounded, input.threshold) };
+}
+
+// Spam at or above the threshold. 59 is ham and 60 is spam when the threshold is 60.
+export function verdictForScore(score: number, threshold: number): SpamVerdict {
+  return score >= threshold ? "spam" : "ham";
+}
+
+export function spamFlagged(disposition: SpamDisposition): boolean {
+  return disposition.folder === "spam" || disposition.labels.includes(SPAM_LABEL);
 }
 
 export function applySpamFilter(mode: SpamMode, assessment: SpamAssessment, labels: readonly string[]): SpamDisposition {

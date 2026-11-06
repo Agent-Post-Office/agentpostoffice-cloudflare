@@ -117,7 +117,7 @@ if envelope :is "to" "support@example.com" {
 }
 ```
 
-The profile can match envelope and selected header metadata and send static plain-text `vacation` replies. It cannot inspect message bodies, redirect, delete, reject, attach files, select arbitrary recipients, or run code. Standard safety checks suppress replies to mailing lists, bulk mail, automated messages, daemon senders, and the mailbox itself.
+The profile can match envelope and selected header metadata and send static plain-text `vacation` replies. It cannot inspect message bodies, redirect, forward, delete, reject, attach files, select arbitrary recipients, or run code. Standard safety checks suppress replies to mailing lists, bulk mail, automated messages, daemon senders, and the mailbox itself. Mail the spam filter flags in `tag` or `quarantine` mode does not enter this queue, so a vacation reply is not sent. `off` stores the score and leaves this queue unchanged.
 
 Store and activation are separate operations:
 
@@ -348,7 +348,11 @@ curl -sS -X PATCH https://agentpostoffice.example.workers.dev/v1/messages/msg_12
 
 Spam is a folder, separate from archive. `folder=inbox|spam|all` selects it. The default feed uses inbox, so spam-folder messages stay out until the caller asks for them. `GET /v1/messages/{id}` still returns a spam-folder message, including `folder` and `spam` (`verdict`, `score`, `reasons`).
 
-Inbound mail is scored while it is parsed. `SPAM_FILTER` is `off`, `tag`, or `quarantine` (default `tag`). `SPAM_THRESHOLD` is an integer from 0 to 100 (default `60`). `tag` adds the `spam` label and leaves the message in inbox. `quarantine` moves it to the spam folder and adds the same label. `off` stores the score and does not label or move the message. This filter never drops or rejects mail. `Authentication-Results` is stored from new deliveries onward. A passing result does not by itself mark mail as spam or as not spam. A row in `inbox_spam_settings` overrides the two variables for one inbox (`mode`, `threshold`; a null column inherits the deployment value).
+Inbound mail is scored while it is parsed. `SPAM_FILTER` is `off`, `tag`, or `quarantine` (default `tag`). `SPAM_THRESHOLD` is an integer from 0 to 100 (default `60`). A score greater than or equal to the threshold is spam: with the default, 59 is ham and 60 is spam. Heuristic points are multiples of 5. `tag` adds the `spam` label and leaves the message in inbox. `quarantine` moves it to the spam folder and adds the same label. `off` stores the score and verdict and does not label, move, or change Sieve. This filter never drops or rejects mail, and it never calls `setReject`. If scoring throws, parsing fails open: the message stays stored, the score columns stay empty, and Sieve still runs. `Authentication-Results` is stored from new deliveries onward. A passing result does not by itself mark mail as spam or as not spam. A missing or unreadable authentication header adds no points. A row in `inbox_spam_settings` overrides the two variables for one inbox (`mode`, `threshold`; a null column inherits the deployment value).
+
+List checks run in this order: sender block, sender allow, domain block, domain allow, then the heuristics. A sender on both the allow list and the block list is spam (`block_sender`). An exact sender allow beats a domain block. An exact sender block beats a domain allow. Domain rules match case-insensitively and include subdomains, so `Example.COM` matches `a@example.com` and `a@sub.example.com`.
+
+`tag` and `quarantine` do not enqueue Sieve for mail they flag. A later Automation Queue task also returns before sending when the message is in the spam folder or carries the `spam` label. `off` does not flag the message, so an active vacation script still runs.
 
 ```sql
 INSERT INTO inbox_spam_settings (inbox_id, mode, threshold, updated_at)
@@ -372,11 +376,15 @@ curl -sS -X POST https://agentpostoffice.example.workers.dev/v1/messages/msg_123
 node packages/cli/dist/index.js messages list --unanswered --thread <thread-id> --inbox <inbox-id>
 node packages/cli/dist/index.js messages list --archived
 node packages/cli/dist/index.js messages list --unarchived
+node packages/cli/dist/index.js messages list --folder spam
+node packages/cli/dist/index.js messages list --folder all
 node packages/cli/dist/index.js messages archive <message-id>
 node packages/cli/dist/index.js messages unarchive <message-id>
+node packages/cli/dist/index.js messages spam <message-id> --block-sender
+node packages/cli/dist/index.js messages not-spam <message-id> --allow-sender
 ```
 
-`--unanswered` is an alias for `replied=false`. The CLI rejects it with `--direction outbound` before the request, matching the API's `400 invalid_filter` response.
+`--unanswered` is an alias for `replied=false`. The CLI rejects it with `--direction outbound` before the request, matching the API's `400 invalid_filter` response. `--folder` is `inbox`, `spam`, or `all`. Omitting it uses the API default, which is inbox. `messages spam` and `messages not-spam` call the mark routes. `--block-sender`, `--block-domain`, `--allow-sender`, and `--allow-domain` map to the optional list edits and need `inboxes:manage` as well as `messages:update`.
 
 Send and reply requests require an `Idempotency-Key`. Reusing the key with different content returns a conflict; once an attempt begins, that key never sends again.
 

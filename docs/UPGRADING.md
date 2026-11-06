@@ -12,7 +12,28 @@ Run `npm ci`, `npm test`, `npm run check`, and `npm run build` before deployment
 
 The thread filter and archive marker are an additive expansion. `0005_message_archived.sql` adds nullable `messages.archived_at` and does not backfill. `0006_message_thread_feed.sql` adds `messages_thread_feed_idx` on `(thread_id, tombstoned_at, received_at, id)` and does not change rows. Apply `0005` before relying on archive reads or writes. Deploying this Worker after `0005` is the supported order: list, thread, and archive routes return their normal status codes, including when `0006` is still pending, because queries do not name the index. Deploying the Worker before `0005` leaves the default feed, `thread_id` filter, and processed-state updates working; those statements do not read `archived_at` (`thread_id` already exists from `0003`). `archived=true|false` and a PATCH body that sets `archived` then fail with HTTP 503 `migration_pending` until `0005` is applied. Rolling the Worker back does not remove the column.
 
-`0007_message_spam.sql` is another additive expansion. It adds `messages.folder` (existing rows default to `inbox`), `spam_score`, `spam_reasons_json`, and `spam_verdict`, plus `inbox_spam_settings` and `inbox_spam_rules`. It does not rewrite message content. The default feed still returns mail if this migration is pending, because a missing `folder` column is treated as inbox. Explicit `folder=inbox` or `folder=spam`, and `mark-spam` / `mark-not-spam`, return HTTP 503 `migration_pending` with `folder requires migration 0007` until it is applied. Archive behavior is unchanged. Rolling the Worker back does not remove the new columns or tables.
+`0007_message_spam.sql` is another additive expansion. Apply it after `0006`. It adds `messages.folder` (existing rows default to `inbox`), `spam_score`, `spam_reasons_json`, and `spam_verdict`, plus `inbox_spam_settings` and `inbox_spam_rules`. It does not backfill scores: those columns stay null, and subject, body, and labels are not rewritten. It also adds `messages_open_inbox_feed_idx` and `messages_open_spam_feed_idx`, partial indexes for the live inbox and spam feeds. Thread listings keep using `messages_thread_feed_idx`.
+
+Deploy the Worker after `0007` is the supported order. The default feed still returns mail if this migration is pending, because a missing `folder` column is treated as inbox. Explicit `folder=inbox` or `folder=spam`, and `mark-spam` / `mark-not-spam`, return HTTP 503 `migration_pending` with `folder requires migration 0007` until it is applied. Archive behavior is unchanged. After `0007`, quarantine hides flagged mail from the default feed and from `messages list` unless `--folder spam` or `--folder all` is set. `tag` and `quarantine` do not run Sieve for mail they flag. `off` still stores the score and still runs Sieve.
+
+Rolling the Worker back to the pre-spam release does not remove the new columns or tables. That release inserts and updates messages by column name and reads fields by name, so the added columns are ignored. Inserts that omit `folder` receive `inbox` from the column default. Leaving `0007` in place is the safe rollback.
+
+Reverting the schema is a separate, destructive step and is not a down migration in this repository. Deploy the older Worker first, then drop only the spam objects. This discards folder placement and scores. It does not delete message rows.
+
+```sql
+DROP INDEX IF EXISTS messages_open_inbox_feed_idx;
+DROP INDEX IF EXISTS messages_open_spam_feed_idx;
+DROP INDEX IF EXISTS inbox_spam_rules_inbox_idx;
+DROP TABLE IF EXISTS inbox_spam_rules;
+DROP TABLE IF EXISTS inbox_spam_settings;
+ALTER TABLE messages DROP COLUMN spam_verdict;
+ALTER TABLE messages DROP COLUMN spam_reasons_json;
+ALTER TABLE messages DROP COLUMN spam_score;
+ALTER TABLE messages DROP COLUMN folder;
+DELETE FROM d1_migrations WHERE name = '0007_message_spam.sql';
+```
+
+If `DROP COLUMN` is rejected, stop and leave the columns. The older Worker already tolerates them. Do not delete rows from `messages` to undo this migration.
 
 For each selected instance:
 

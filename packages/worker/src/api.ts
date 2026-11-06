@@ -524,6 +524,24 @@ async function applySpamMark(messageId: string, auth: AuthContext, env: Env, mar
   const editsList = mark.blockSender || mark.blockDomain || mark.allowSender || mark.allowDomain;
   if (editsList) requireScope(auth, "inboxes:manage");
   const current = await getMessage(messageId, env);
+  const nextLabels = labelsForSpamFolder(stringLabels(current.labels_json), mark.spam);
+  const nextReasons = withOperatorMark(current.spam_reasons_json);
+  const sameState = (current.folder === "spam") === mark.spam
+    && JSON.stringify(stringLabels(current.labels_json)) === JSON.stringify(nextLabels)
+    && current.spam_verdict === (mark.spam ? "spam" : "ham")
+    && JSON.stringify(parseReasonList(current.spam_reasons_json)) === JSON.stringify(nextReasons);
+  if (!editsList && sameState) {
+    return json({
+      data: {
+        id: current.id,
+        folder: current.folder === "spam" ? "spam" : "inbox",
+        state: current.agent_state,
+        labels: stringLabels(current.labels_json),
+        spam: spamView(current),
+        updated_at: current.updated_at,
+      },
+    });
+  }
   const sender = editsList ? listAddress(current.envelope_from) : null;
   const domain = sender ? domainOf(sender) : null;
   const labels = labelsForSpamFolder(stringLabels(current.labels_json), mark.spam);

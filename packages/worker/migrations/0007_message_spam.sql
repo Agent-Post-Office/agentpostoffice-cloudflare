@@ -24,3 +24,9 @@ CREATE TABLE inbox_spam_rules (
 );
 
 CREATE INDEX IF NOT EXISTS inbox_spam_rules_inbox_idx ON inbox_spam_rules (inbox_id, kind);
+
+-- Live inbox and spam feeds exclude tombstones and order by received_at, id.
+-- These partial indexes match that walk. They do not lead with folder, so a
+-- thread_id listing still uses messages_thread_feed_idx.
+CREATE INDEX IF NOT EXISTS messages_open_inbox_feed_idx ON messages (received_at, id) WHERE folder = 'inbox' AND tombstoned_at IS NULL;
+CREATE INDEX IF NOT EXISTS messages_open_spam_feed_idx ON messages (received_at, id) WHERE folder = 'spam' AND tombstoned_at IS NULL;

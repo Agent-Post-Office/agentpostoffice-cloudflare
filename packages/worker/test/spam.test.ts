@@ -1,6 +1,7 @@
 import { env } from "cloudflare:test";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleApi } from "../src/api.js";
+import { executeAutomationTask } from "../src/automation.js";
 import { handleInbound, type ForwardableEmailMessage } from "../src/inbound.js";
 import { parseMessage } from "../src/queue.js";
 import { DEFAULT_SPAM_THRESHOLD } from "../src/spam.js";
@@ -16,6 +17,9 @@ const bothToken = `apo_spamboth12345_${"b".repeat(43)}`;
 
 beforeEach(async () => {
   await env.DB.batch([
+    env.DB.prepare("DELETE FROM sieve_vacation_responses"),
+    env.DB.prepare("DELETE FROM sieve_runs"),
+    env.DB.prepare("DELETE FROM sieve_scripts"),
     env.DB.prepare("DELETE FROM inbox_spam_rules"),
     env.DB.prepare("DELETE FROM inbox_spam_settings"),
     env.DB.prepare("DELETE FROM attachments"),
@@ -280,6 +284,179 @@ describe("spam folder feed and marks", () => {
     ).all<{ kind: string; value: string }>();
     expect(rules.results).toEqual([{ kind: "allow_domain", value: "example.net" }]);
   });
+
+  it("walks folder=all with a cursor and does not skip or repeat mixed mail", async () => {
+    await readyMessage("msg_page_a", "inbox", "2026-11-06T01:00:00.000Z");
+    await readyMessage("msg_page_b", "spam", "2026-11-06T01:00:00.000Z");
+    await readyMessage("msg_page_c", "inbox", "2026-11-06T02:00:00.000Z");
+    await readyMessage("msg_page_d", "spam", "2026-11-06T03:00:00.000Z");
+    await readyMessage("msg_page_e", "inbox", "2026-11-06T04:00:00.000Z");
+
+    const seen: string[] = [];
+    let cursor: string | null = null;
+    for (let page = 0; page < 4; page += 1) {
+      const path = `/v1/messages?folder=all&order=asc&limit=2${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
+      const response = await api(path);
+      expect(response.status).toBe(200);
+      const body = await response.json() as { data: Array<{ id: string }>; next_cursor: string | null };
+      seen.push(...body.data.map((row) => row.id));
+      if (!body.next_cursor) {
+        expect(page).toBe(2);
+        expect(body.data).toHaveLength(1);
+        break;
+      }
+      expect(body.data).toHaveLength(2);
+      cursor = body.next_cursor;
+    }
+    expect(seen).toEqual(["msg_page_a", "msg_page_b", "msg_page_c", "msg_page_d", "msg_page_e"]);
+    expect(new Set(seen).size).toBe(seen.length);
+  });
+
+  it("treats a repeated spam mark as the same state and moves not-spam back once", async () => {
+    await readyMessage("msg_idem", "inbox", now, "person@example.net");
+    const first = await api("/v1/messages/msg_idem/mark-spam", { method: "POST", body: "{}", token: updateToken });
+    const firstBody = await first.json();
+    const second = await api("/v1/messages/msg_idem/mark-spam", { method: "POST", body: "{}", token: updateToken });
+    expect(await second.json()).toEqual(firstBody);
+    expect(JSON.parse((await stored("msg_idem")).spam_reasons_json ?? "[]").filter((reason: string) => reason === "operator_mark")).toEqual(["operator_mark"]);
+    expect(await ruleCount()).toBe(0);
+
+    await api("/v1/messages/msg_idem/mark-spam", {
+      method: "POST",
+      body: JSON.stringify({ also_block_sender: true }),
+      token: bothToken,
+    });
+    await api("/v1/messages/msg_idem/mark-spam", {
+      method: "POST",
+      body: JSON.stringify({ also_block_sender: true }),
+      token: bothToken,
+    });
+    const rules = await env.DB.prepare(
+      "SELECT kind, value FROM inbox_spam_rules WHERE inbox_id = 'inb_spam'",
+    ).all<{ kind: string; value: string }>();
+    expect(rules.results).toEqual([{ kind: "block_sender", value: "person@example.net" }]);
+    expect(await stored("msg_idem")).toMatchObject({ folder: "spam", spam_verdict: "spam" });
+
+    const cleared = await api("/v1/messages/msg_idem/mark-not-spam", { method: "POST", body: "{}", token: updateToken });
+    const clearedBody = await cleared.json() as { data: { folder: string; labels: string[]; spam: { verdict: string } } };
+    expect(clearedBody.data.folder).toBe("inbox");
+    expect(clearedBody.data.labels).toEqual([]);
+    expect(clearedBody.data.spam.verdict).toBe("ham");
+    const clearedAgain = await api("/v1/messages/msg_idem/mark-not-spam", { method: "POST", body: "{}", token: updateToken });
+    expect(await clearedAgain.json()).toEqual(clearedBody);
+    expect(await stored("msg_idem")).toMatchObject({ folder: "inbox", spam_verdict: "ham" });
+    const remaining = await env.DB.prepare(
+      "SELECT kind, value FROM inbox_spam_rules WHERE inbox_id = 'inb_spam'",
+    ).all<{ kind: string; value: string }>();
+    expect(remaining.results).toEqual([{ kind: "block_sender", value: "person@example.net" }]);
+  });
+});
+
+describe("spam does not send or drop mail", () => {
+  it.each(["tag", "quarantine"] as const)("sends no vacation reply and does not reject %s mail", async (mode) => {
+    await setSettings(mode, 60);
+    await env.DB.prepare(
+      "INSERT INTO inbox_spam_rules (inbox_id, kind, value, created_at) VALUES ('inb_spam', 'block_sender', 'person@example.net', ?)",
+    ).bind(now).run();
+    await installVacation();
+    const delivered = await deliver("person@example.net", "Hello", "Hi there.");
+    expect(delivered.rejected).toBe(false);
+
+    const queueSend = vi.fn(async () => undefined);
+    await parseMessage(
+      { kind: "parse", messageId: delivered.id, rawR2Key: delivered.rawKey },
+      { ...workerEnv, AUTOMATION_QUEUE: { send: queueSend } as unknown as Env["AUTOMATION_QUEUE"] },
+    );
+    expect(queueSend).not.toHaveBeenCalled();
+    const row = await stored(delivered.id);
+    expect(row.parse_status).toBe("ready");
+    expect(row.tombstoned_at).toBeNull();
+    expect(row.spam_verdict).toBe("spam");
+    expect(row.labels_json).toContain("spam");
+    expect(row.folder).toBe(mode === "quarantine" ? "spam" : "inbox");
+    expect(await env.MAIL_BUCKET.get(delivered.rawKey)).not.toBeNull();
+
+    const emailSend = vi.fn(async () => ({ messageId: "provider-auto" }));
+    await executeAutomationTask(
+      { kind: "automate", messageId: delivered.id, scriptId: "siv_away", scriptRevision: 1 },
+      { ...workerEnv, EMAIL: { send: emailSend } as unknown as Env["EMAIL"] },
+    );
+    expect(emailSend).not.toHaveBeenCalled();
+    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM sieve_runs").first()).toEqual({ count: 0 });
+    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM messages WHERE direction = 'outbound'").first()).toEqual({ count: 0 });
+  });
+
+  it("stores a score in off mode and still runs Sieve", async () => {
+    await setSettings("off", 60);
+    await env.DB.prepare(
+      "INSERT INTO inbox_spam_rules (inbox_id, kind, value, created_at) VALUES ('inb_spam', 'block_sender', 'person@example.net', ?)",
+    ).bind(now).run();
+    await installVacation();
+    const delivered = await deliver("person@example.net", "Hello", "Hi there.");
+    expect(delivered.rejected).toBe(false);
+    const queueSend = vi.fn(async () => undefined);
+    await parseMessage(
+      { kind: "parse", messageId: delivered.id, rawR2Key: delivered.rawKey },
+      { ...workerEnv, AUTOMATION_QUEUE: { send: queueSend } as unknown as Env["AUTOMATION_QUEUE"] },
+    );
+    expect(queueSend).toHaveBeenCalledOnce();
+    const row = await stored(delivered.id);
+    expect(row).toMatchObject({
+      folder: "inbox",
+      labels_json: "[]",
+      spam_verdict: "spam",
+      parse_status: "ready",
+      tombstoned_at: null,
+    });
+    expect(row.spam_score).toBeGreaterThanOrEqual(DEFAULT_SPAM_THRESHOLD);
+    const emailSend = vi.fn(async () => ({ messageId: "provider-off" }));
+    await executeAutomationTask(
+      { kind: "automate", messageId: delivered.id, scriptId: "siv_away", scriptRevision: 1 },
+      { ...workerEnv, EMAIL: { send: emailSend } as unknown as Env["EMAIL"] },
+    );
+    expect(emailSend).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the message and still queues Sieve when scoring throws", async () => {
+    await installVacation();
+    const id = "msg_failopen";
+    const rawKey = `messages/inb_spam/${id}/raw.eml`;
+    await env.MAIL_BUCKET.put(rawKey, "From: person@example.net\r\nTo: spam@mail.example.com\r\nSubject: Hello\r\n\r\nHi there.");
+    await env.DB.prepare(
+      `INSERT INTO messages (
+        id, inbox_id, direction, envelope_from, envelope_to, subject, raw_r2_key, parse_status, agent_state,
+        labels_json, headers_json, received_at, created_at, updated_at
+      ) VALUES (?, 'inb_spam', 'inbound', 'person@example.net', 'spam@mail.example.com', 'Hello', ?, 'pending', 'unprocessed', '[]', '{}', ?, ?, ?)`,
+    ).bind(id, rawKey, now, now, now).run();
+    const queueSend = vi.fn(async () => undefined);
+    const database = env.DB;
+    await parseMessage(
+      { kind: "parse", messageId: id, rawR2Key: rawKey },
+      {
+        ...workerEnv,
+        AUTOMATION_QUEUE: { send: queueSend } as unknown as Env["AUTOMATION_QUEUE"],
+        DB: {
+          prepare(sql: string) {
+            if (sql.includes("inbox_spam_")) throw new Error("D1_ERROR: scorer backend failed");
+            return database.prepare(sql);
+          },
+          batch: database.batch.bind(database),
+          exec: database.exec.bind(database),
+        },
+      } as Env,
+    );
+    const row = await stored(id);
+    expect(row).toMatchObject({
+      folder: "inbox",
+      labels_json: "[]",
+      spam_verdict: null,
+      spam_score: null,
+      parse_status: "ready",
+      tombstoned_at: null,
+    });
+    expect(await env.MAIL_BUCKET.get(rawKey)).not.toBeNull();
+    expect(queueSend).toHaveBeenCalledOnce();
+  });
 });
 
 async function insertKey(keyId: string, token: string, scopes: string[]): Promise<void> {
@@ -364,6 +541,45 @@ async function stored(id: string): Promise<{
   }>();
   if (!row) throw new Error(`missing message ${id}`);
   return row;
+}
+
+const vacationSource = `
+require ["envelope", "vacation"];
+if envelope :is "to" "spam@mail.example.com" {
+  vacation :days 1 :subject "Away" "Out of office.";
+  stop;
+}`;
+
+async function installVacation(): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO sieve_scripts
+      (id, inbox_id, name, revision, source, compiled_ir_json, source_sha256, active, created_at, updated_at)
+     VALUES ('siv_away', 'inb_spam', 'Away', 1, ?, '{}', ?, 1, ?, ?)`,
+  ).bind(vacationSource, "c".repeat(64), now, now).run();
+}
+
+async function deliver(from: string, subject: string, text: string): Promise<{ id: string; rawKey: string; rejected: boolean }> {
+  const raw = new TextEncoder().encode([
+    `From: ${from}`,
+    "To: spam@mail.example.com",
+    `Subject: ${subject}`,
+    "",
+    text,
+  ].join("\r\n"));
+  let rejected = false;
+  await handleInbound({
+    from,
+    to: "spam@mail.example.com",
+    headers: new Headers({ subject }),
+    raw: new ReadableStream({ start(controller) { controller.enqueue(raw); controller.close(); } }),
+    rawSize: raw.byteLength,
+    setReject() { rejected = true; },
+  }, workerEnv);
+  const pending = await env.DB.prepare(
+    "SELECT id, raw_r2_key FROM messages WHERE envelope_from = ?",
+  ).bind(from).first<{ id: string; raw_r2_key: string }>();
+  if (!pending) throw new Error("inbound message was not stored");
+  return { id: pending.id, rawKey: pending.raw_r2_key, rejected };
 }
 
 async function ruleCount(): Promise<number> {

@@ -1,8 +1,9 @@
 import { compileSieve, evaluateSieve } from "@agentpostoffice/sieve";
 import { sendAutomationReply } from "./outbound.js";
+import { SPAM_LABEL } from "./spam.js";
 import { appendReference, headerValueWithinLimit, threadingMessageId } from "./threading.js";
 import type { Env, InboxRow, MessageRow, QueueTask } from "./types.js";
-import { newId, normalizeAddress, nowIso } from "./util.js";
+import { newId, normalizeAddress, nowIso, parseJsonArray } from "./util.js";
 
 interface SieveScriptRow {
   id: string;
@@ -20,6 +21,8 @@ export async function executeAutomationTask(
     "SELECT * FROM messages WHERE id = ? AND direction = 'inbound' AND parse_status = 'ready' AND tombstoned_at IS NULL",
   ).bind(task.messageId).first<MessageRow>();
   if (!message) return;
+  const labels = parseJsonArray(message.labels_json).filter((label): label is string => typeof label === "string");
+  if (message.folder === "spam" || labels.includes(SPAM_LABEL)) return;
   const script = await env.DB.prepare(
     "SELECT id, inbox_id, revision, source, active FROM sieve_scripts WHERE id = ? AND inbox_id = ? AND revision = ?",
   ).bind(task.scriptId, message.inbox_id, task.scriptRevision).first<SieveScriptRow>();

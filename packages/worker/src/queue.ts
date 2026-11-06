@@ -1,6 +1,6 @@
 import PostalMime from "postal-mime";
 import { executeAutomationTask } from "./automation.js";
-import { mergeAuthenticationResults } from "./spam.js";
+import { mergeAuthenticationResults, spamFlagged } from "./spam.js";
 import { assessInbound } from "./spam-store.js";
 import { messageIdsFromHeader, resolveThreadLink, trimReferenceIds } from "./threading.js";
 import type { AttachmentRow, Env, MessageRow, QueueTask } from "./types.js";
@@ -135,17 +135,24 @@ export async function parseMessage(task: Extract<QueueTask, { kind: "parse" }>, 
   }
 
   const currentLabels = parseJsonArray(row.labels_json).filter((label): label is string => typeof label === "string");
-  const assessed = await assessInbound(env, row.inbox_id, {
-    from: row.envelope_from,
-    subject: parsed.subject || row.subject,
-    text,
-    authenticationResults,
-  }, currentLabels);
+  let assessed: Awaited<ReturnType<typeof assessInbound>> | null = null;
+  try {
+    assessed = await assessInbound(env, row.inbox_id, {
+      from: row.envelope_from,
+      subject: parsed.subject || row.subject,
+      text,
+      authenticationResults,
+    }, currentLabels);
+  } catch (error) {
+    // Fail open. A scorer error must not drop the message or suppress Sieve.
+    console.error("spam_assess_failed", row.id, error instanceof Error ? error.name : "unknown");
+  }
+  const flagged = assessed ? spamFlagged(assessed.disposition) : false;
 
   const activeScript = await env.DB.prepare(
     "SELECT id, revision FROM sieve_scripts WHERE inbox_id = ? AND active = 1",
   ).bind(row.inbox_id).first<{ id: string; revision: number }>();
-  if (activeScript) {
+  if (activeScript && !flagged) {
     await env.AUTOMATION_QUEUE.send({
       kind: "automate",
       messageId: row.id,
@@ -166,6 +173,10 @@ export async function parseMessage(task: Extract<QueueTask, { kind: "parse" }>, 
     refineThread ? 1 : 0,
     link?.threadId ?? null,
   ];
+  if (!assessed) {
+    await finishParse(env, row.id, baseBindings, null);
+    return;
+  }
   const spamBindings = [
     assessed.disposition.folder,
     JSON.stringify(assessed.disposition.labels),

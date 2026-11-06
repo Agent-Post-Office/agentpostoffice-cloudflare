@@ -5,6 +5,7 @@ import {
   applySpamFilter,
   resolveSpamConfig,
   scoreSpam,
+  verdictForScore,
   type SpamLists,
   type SpamScoreInput,
 } from "../packages/worker/src/spam.js";
@@ -146,6 +147,122 @@ describe("spam rules scorer", () => {
     expect(blocked).toMatchObject({ verdict: "spam", score: 100, reasons: ["block_sender"] });
     expect(blockedParent).toMatchObject({ verdict: "spam", score: 100, reasons: ["block_domain"] });
     expect(senderAllowBeatsDomainBlock.verdict).toBe("ham");
+  });
+
+  it("lets a sender block win when that sender is also allowlisted", () => {
+    const both = scoreSpam(message({
+      from: "Person <Person@Example.COM>",
+      subject: "Hello",
+      text: "A normal note.",
+      lists: {
+        ...EMPTY_LISTS,
+        allowSenders: ["person@example.com"],
+        blockSenders: ["PERSON@example.com"],
+      },
+    }));
+    const allowOnly = scoreSpam(message({
+      from: "Person <Person@Example.COM>",
+      subject: "We tested your MCP server",
+      text: "We tested your MCP server.",
+      lists: { ...EMPTY_LISTS, allowSenders: ["person@example.com"] },
+    }));
+    expect(both).toMatchObject({ verdict: "spam", score: 100, reasons: ["block_sender"] });
+    expect(allowOnly).toMatchObject({ verdict: "ham", score: 0, reasons: ["allow_sender"] });
+  });
+
+  it("matches domain rules case-insensitively, including subdomains, and lets an exact sender win", () => {
+    const listed = { ...EMPTY_LISTS, blockDomains: ["Example.COM"] };
+    expect(scoreSpam(message({
+      from: "a@example.com",
+      subject: "Hello",
+      text: "A normal note.",
+      lists: listed,
+    }))).toMatchObject({ verdict: "spam", reasons: ["block_domain"] });
+    expect(scoreSpam(message({
+      from: "a@Sub.Example.com",
+      subject: "Hello",
+      text: "A normal note.",
+      lists: listed,
+    }))).toMatchObject({ verdict: "spam", reasons: ["block_domain"] });
+    expect(scoreSpam(message({
+      from: "a@example.com.evil.test",
+      subject: "Hello",
+      text: "A normal note.",
+      lists: listed,
+    })).verdict).toBe("ham");
+    expect(scoreSpam(message({
+      from: "a@notexample.com",
+      subject: "Hello",
+      text: "A normal note.",
+      lists: listed,
+    })).verdict).toBe("ham");
+    expect(scoreSpam(message({
+      from: "a@sub.example.com",
+      subject: "We tested your MCP server",
+      text: "We tested your MCP server.",
+      lists: {
+        ...EMPTY_LISTS,
+        blockDomains: ["example.com"],
+        allowSenders: ["a@sub.example.com"],
+      },
+    }))).toMatchObject({ verdict: "ham", reasons: ["allow_sender"] });
+    expect(scoreSpam(message({
+      from: "a@sub.example.com",
+      subject: "Hello",
+      text: "A normal note.",
+      lists: {
+        ...EMPTY_LISTS,
+        allowDomains: ["Example.COM"],
+        blockSenders: ["a@sub.example.com"],
+      },
+    }))).toMatchObject({ verdict: "spam", reasons: ["block_sender"] });
+  });
+
+  it("treats a score at the threshold as spam and the point below as ham", () => {
+    expect(verdictForScore(59, 60)).toBe("ham");
+    expect(verdictForScore(60, 60)).toBe("spam");
+    expect(verdictForScore(61, 60)).toBe("spam");
+
+    const atThreshold = scoreSpam(message({
+      from: "researcher@example.org",
+      subject: "Hello",
+      text: "A normal note.",
+      authenticationResults: "mx.example; dmarc=fail; spf=fail",
+      threshold: 60,
+    }));
+    const below = scoreSpam(message({
+      from: "researcher@example.org",
+      subject: "Hello",
+      text: "A normal note.",
+      authenticationResults: "mx.example; dmarc=fail",
+      threshold: 60,
+    }));
+    expect(atThreshold).toMatchObject({ score: 60, verdict: "spam" });
+    expect(below).toMatchObject({ score: 40, verdict: "ham" });
+  });
+
+  it("scores empty, missing, and malformed headers without throwing", () => {
+    const samples = [
+      message({ from: "", subject: null, text: "", authenticationResults: null }),
+      message({ from: "not-an-email", subject: "", text: "", authenticationResults: "{{{not a header" }),
+      message({ from: "person@example.org", subject: null, text: "", authenticationResults: null }),
+      message({
+        from: "sales@mg.sealkeeper.run",
+        subject: "We tested your MCP server",
+        text: "We tested your MCP server.",
+        authenticationResults: "garbage authentication results",
+      }),
+    ];
+    for (const sample of samples) {
+      const scored = scoreSpam(sample);
+      expect(scored.score).toBeGreaterThanOrEqual(0);
+      expect(scored.score).toBeLessThanOrEqual(100);
+      expect(["spam", "ham"]).toContain(scored.verdict);
+      expect(Array.isArray(scored.reasons)).toBe(true);
+    }
+    expect(scoreSpam(samples[0]!).verdict).toBe("ham");
+    expect(scoreSpam(samples[2]!).verdict).toBe("ham");
+    expect(scoreSpam(samples[3]!).verdict).toBe("spam");
   });
 
   it("resolves deployment defaults, then the per-inbox override", () => {
