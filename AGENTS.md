@@ -3,6 +3,7 @@
 ## Monorepo
 
 - `packages/worker`: Cloudflare Worker, D1 migrations, R2/Queue/email bindings.
+- `packages/spam-filter`: source of truth for the spam scorer (`@agent-post-office/spam-filter`). The public repository is the published mirror.
 - `packages/client`: reusable REST client and public TypeScript types.
 - `packages/cli`: local agent/operator CLI.
 - `packages/mcp`: shared MCP tool catalog and the local stdio server. The Worker serves the same tools, except the filesystem saves, at `POST /mcp`.

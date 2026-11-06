@@ -2,6 +2,8 @@
 
 Inbound mail is scored while it is parsed. The score is additive, from 0 to 100. A score greater than or equal to the threshold is spam. With the default threshold, 59 is ham and 60 is spam.
 
+The scorer lives in `packages/spam-filter` (`@agent-post-office/spam-filter`). That package is the source of truth for rules, weights, tokenization, and Bayes. The Worker keeps the D1 schema, marks, block and allow lists, and backfill, and calls the package to score and to compute training deltas.
+
 Mail the filter flags in `tag` or `quarantine` mode does not enter the Sieve automation queue. A later automation task also returns before sending when the message is in the spam folder or carries the `spam` label. `off` stores the score and leaves that queue unchanged.
 
 If scoring throws, parsing fails open: the message stays stored, the score columns stay empty, and Sieve still runs. A Bayes or training-table failure keeps the rules score. The filter does not call `setReject`, does not tombstone the message, and does not delete the raw MIME. Deleting mail is a separate `messages:delete` action.
@@ -58,7 +60,7 @@ Operator marks do not follow this table. `mark-spam` always sets the folder to `
 
 ## Threshold
 
-The default 60 is the constant `DEFAULT_SPAM_THRESHOLD` in `packages/worker/src/spam.ts`. It is used when the Worker var and the inbox column are both unset or invalid.
+The default 60 is the constant `DEFAULT_SPAM_THRESHOLD` in `packages/spam-filter`. It is used when the Worker var and the inbox column are both unset or invalid.
 
 `SPAM_THRESHOLD` is configurable. It is a Worker var, a string integer from 0 to 100. `inbox_spam_settings.threshold` overrides it for one inbox. The verdict is spam when `score >= threshold`.
 

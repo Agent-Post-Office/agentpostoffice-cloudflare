@@ -1,0 +1,51 @@
+{
+  "name": "@agent-post-office/spam-filter",
+  "version": "0.1.0",
+  "description": "Worker-safe additive email spam scorer used by Agent Post Office. Pure TypeScript, zero runtime dependencies.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "author": "Agent Post Office",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Agent-Post-Office/agent-post-office-spam-filter.git"
+  },
+  "keywords": [
+    "spam",
+    "email",
+    "cloudflare-workers",
+    "authentication-results",
+    "dmarc",
+    "phishing"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "src",
+    "LICENSE",
+    "README.md",
+    "NOTICE"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepare": "npm run build",
+    "test": "vitest run",
+    "clean": "rm -rf dist",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0",
+    "vitest": "^3.0.0"
+  }
+}
