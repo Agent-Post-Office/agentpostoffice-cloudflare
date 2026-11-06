@@ -3,11 +3,15 @@ import { authenticate, requireScope } from "./auth.js";
 import { compileSieve, evaluateSieve, SieveValidationError } from "@agentpostoffice/sieve";
 import { errorResponse, HttpError, json, readJson, requireString } from "./http.js";
 import { replyToMessage, sendNew } from "./outbound.js";
+import { domainOf, labelsForSpamFolder, parseReasonList, withOperatorMark } from "./spam.js";
+import { spamListStatements } from "./spam-store.js";
 import type { AttachmentRow, AuthContext, Env, InboxRow, MessageRow, QueueTask } from "./types.js";
 import {
   decodeCursor,
   encodeCursor,
+  errorMentionsMissingSchema,
   newId,
+  normalizeAddress,
   normalizeDomain,
   normalizeLocalPart,
   nowIso,
@@ -305,6 +309,14 @@ async function routeMessages(
     const result = await replyToMessage(messageId, input, requireIdempotencyKey(request), auth, env);
     return json({ data: result.body }, result.status);
   }
+  if (segments[1] === "mark-spam" && segments.length === 2 && request.method === "POST") {
+    requireScope(auth, "messages:update");
+    return markSpam(request, messageId, auth, env);
+  }
+  if (segments[1] === "mark-not-spam" && segments.length === 2 && request.method === "POST") {
+    requireScope(auth, "messages:update");
+    return markNotSpam(request, messageId, auth, env);
+  }
   if (segments[1] === "raw" && segments.length === 2 && request.method === "GET") {
     requireScope(auth, "messages:read");
     return streamRaw(messageId, env);
@@ -337,37 +349,56 @@ async function listMessages(url: URL, env: Env): Promise<Response> {
   if (archived !== null && archived !== "true" && archived !== "false") {
     throw new HttpError(400, "invalid_filter", "archived is invalid");
   }
+  const folder = url.searchParams.get("folder");
+  if (folder !== null && folder !== "inbox" && folder !== "spam" && folder !== "all") {
+    throw new HttpError(400, "invalid_filter", "folder is invalid");
+  }
   const inboxId = url.searchParams.get("inbox_id");
   const since = validTimestamp(url.searchParams.get("since"), "since");
   const until = validTimestamp(url.searchParams.get("until"), "until");
   const cursorValue = url.searchParams.get("cursor");
   const cursor = cursorValue ? decodeCursor(cursorValue) : null;
 
-  const clauses = ["m.tombstoned_at IS NULL"];
-  const bindings: unknown[] = [];
-  if (state) { clauses.push("m.agent_state = ?"); bindings.push(state); }
-  if (direction) { clauses.push("m.direction = ?"); bindings.push(direction); }
-  else if (replied === "true" || replied === "false") clauses.push("m.direction = 'inbound'");
-  if (replied === "true") clauses.push("m.replied_at IS NOT NULL");
-  if (replied === "false") clauses.push("m.replied_at IS NULL");
-  if (threadId) { clauses.push("m.thread_id = ?"); bindings.push(threadId); }
-  if (archived === "true") clauses.push("m.archived_at IS NOT NULL");
-  if (archived === "false") clauses.push("m.archived_at IS NULL");
-  if (inboxId) { clauses.push("m.inbox_id = ?"); bindings.push(inboxId); }
-  if (since) { clauses.push("m.received_at >= ?"); bindings.push(since); }
-  if (until) { clauses.push("m.received_at <= ?"); bindings.push(until); }
-  if (cursor) {
-    const comparator = order === "asc" ? ">" : "<";
-    clauses.push(`(m.received_at ${comparator} ? OR (m.received_at = ? AND m.id ${comparator} ?))`);
-    bindings.push(cursor.receivedAt, cursor.receivedAt, cursor.messageId);
-  }
+  const selectedFolder = folder === "all" ? null : (folder ?? "inbox");
+  const queryPage = (applyFolder: boolean) => {
+    const clauses = ["m.tombstoned_at IS NULL"];
+    const bindings: unknown[] = [];
+    if (state) { clauses.push("m.agent_state = ?"); bindings.push(state); }
+    if (direction) { clauses.push("m.direction = ?"); bindings.push(direction); }
+    else if (replied === "true" || replied === "false") clauses.push("m.direction = 'inbound'");
+    if (replied === "true") clauses.push("m.replied_at IS NOT NULL");
+    if (replied === "false") clauses.push("m.replied_at IS NULL");
+    if (threadId) { clauses.push("m.thread_id = ?"); bindings.push(threadId); }
+    if (archived === "true") clauses.push("m.archived_at IS NOT NULL");
+    if (archived === "false") clauses.push("m.archived_at IS NULL");
+    if (applyFolder && selectedFolder) { clauses.push("m.folder = ?"); bindings.push(selectedFolder); }
+    if (inboxId) { clauses.push("m.inbox_id = ?"); bindings.push(inboxId); }
+    if (since) { clauses.push("m.received_at >= ?"); bindings.push(since); }
+    if (until) { clauses.push("m.received_at <= ?"); bindings.push(until); }
+    if (cursor) {
+      const comparator = order === "asc" ? ">" : "<";
+      clauses.push(`(m.received_at ${comparator} ? OR (m.received_at = ? AND m.id ${comparator} ?))`);
+      bindings.push(cursor.receivedAt, cursor.receivedAt, cursor.messageId);
+    }
 
-  const query = `SELECT m.*, i.domain, i.local_part, i.display_name
-    FROM messages m JOIN inboxes i ON i.id = m.inbox_id
-    WHERE ${clauses.join(" AND ")}
-    ORDER BY m.received_at ${order.toUpperCase()}, m.id ${order.toUpperCase()} LIMIT ?`;
-  bindings.push(limit + 1);
-  const result = await readArchiveQuery(() => env.DB.prepare(query).bind(...bindings).all<MessageRow & Pick<InboxRow, "domain" | "local_part" | "display_name">>());
+    const query = `SELECT m.*, i.domain, i.local_part, i.display_name
+      FROM messages m JOIN inboxes i ON i.id = m.inbox_id
+      WHERE ${clauses.join(" AND ")}
+      ORDER BY m.received_at ${order.toUpperCase()}, m.id ${order.toUpperCase()} LIMIT ?`;
+    bindings.push(limit + 1);
+    return readMessageQuery(
+      () => env.DB.prepare(query).bind(...bindings).all<MessageRow & Pick<InboxRow, "domain" | "local_part" | "display_name">>(),
+      { archived: archived !== null, folder: Boolean(applyFolder && selectedFolder) },
+    );
+  };
+  let result: Awaited<ReturnType<typeof queryPage>>;
+  try {
+    result = await queryPage(true);
+  } catch (error) {
+    if (!(error instanceof MissingFolderColumn)) throw error;
+    if (folder !== null) throw new HttpError(503, "migration_pending", "folder requires migration 0007");
+    result = await queryPage(false);
+  }
   const hasMore = result.results.length > limit;
   const rows = result.results.slice(0, limit);
   const last = rows.at(-1);
@@ -429,9 +460,9 @@ async function updateMessage(request: Request, messageId: string, env: Env): Pro
   }
   assignments.push("updated_at = ?");
   bindings.push(updatedAt, messageId);
-  const updated = await readArchiveQuery(() => env.DB.prepare(
+  const updated = await readMessageQuery(() => env.DB.prepare(
     `UPDATE messages SET ${assignments.join(", ")} WHERE id = ? AND tombstoned_at IS NULL RETURNING *`,
-  ).bind(...bindings).all<MessageRow>());
+  ).bind(...bindings).all<MessageRow>(), { archived: input.archived !== undefined, folder: false });
   const row = updated.results[0];
   if (!row) throw new HttpError(404, "not_found", "Message not found");
   return json({
@@ -445,30 +476,150 @@ async function updateMessage(request: Request, messageId: string, env: Env): Pro
   });
 }
 
-async function readArchiveQuery<T>(work: () => Promise<T>): Promise<T> {
+class MissingFolderColumn extends Error {}
+
+async function readMessageQuery<T>(work: () => Promise<T>, columns: { archived: boolean; folder: boolean }): Promise<T> {
   try {
     return await work();
   } catch (error) {
-    if (missingArchivedColumn(error)) {
+    if (columns.archived && errorMentionsMissingSchema(error, "archived_at")) {
       throw new HttpError(503, "migration_pending", "archived_at requires migration 0005");
+    }
+    if (columns.folder && errorMentionsMissingSchema(error, "folder")) {
+      throw new MissingFolderColumn();
     }
     throw error;
   }
 }
 
-function missingArchivedColumn(error: unknown): boolean {
-  const pending = /no such column:\s*(?:\w+\.)?archived_at\b/i;
-  const seen = new Set<unknown>();
-  let current: unknown = error;
-  while (current && !seen.has(current)) {
-    seen.add(current);
-    if (typeof current === "string") return pending.test(current);
-    if (typeof current !== "object") return false;
-    const record = current as { message?: unknown; cause?: unknown };
-    if (typeof record.message === "string" && pending.test(record.message)) return true;
-    current = record.cause;
+async function markSpam(request: Request, messageId: string, auth: AuthContext, env: Env): Promise<Response> {
+  const input = await readOptionalObject(request);
+  return applySpamMark(messageId, auth, env, {
+    spam: true,
+    blockSender: optionalFlag(input, "also_block_sender"),
+    blockDomain: optionalFlag(input, "also_block_domain"),
+    allowSender: false,
+    allowDomain: false,
+  });
+}
+
+async function markNotSpam(request: Request, messageId: string, auth: AuthContext, env: Env): Promise<Response> {
+  const input = await readOptionalObject(request);
+  return applySpamMark(messageId, auth, env, {
+    spam: false,
+    blockSender: false,
+    blockDomain: false,
+    allowSender: optionalFlag(input, "also_allow_sender"),
+    allowDomain: optionalFlag(input, "also_allow_domain"),
+  });
+}
+
+async function applySpamMark(messageId: string, auth: AuthContext, env: Env, mark: {
+  spam: boolean;
+  blockSender: boolean;
+  blockDomain: boolean;
+  allowSender: boolean;
+  allowDomain: boolean;
+}): Promise<Response> {
+  const editsList = mark.blockSender || mark.blockDomain || mark.allowSender || mark.allowDomain;
+  if (editsList) requireScope(auth, "inboxes:manage");
+  const current = await getMessage(messageId, env);
+  const nextLabels = labelsForSpamFolder(stringLabels(current.labels_json), mark.spam);
+  const nextReasons = withOperatorMark(current.spam_reasons_json);
+  const sameState = (current.folder === "spam") === mark.spam
+    && JSON.stringify(stringLabels(current.labels_json)) === JSON.stringify(nextLabels)
+    && current.spam_verdict === (mark.spam ? "spam" : "ham")
+    && JSON.stringify(parseReasonList(current.spam_reasons_json)) === JSON.stringify(nextReasons);
+  if (!editsList && sameState) {
+    return json({
+      data: {
+        id: current.id,
+        folder: current.folder === "spam" ? "spam" : "inbox",
+        state: current.agent_state,
+        labels: stringLabels(current.labels_json),
+        spam: spamView(current),
+        updated_at: current.updated_at,
+      },
+    });
   }
-  return false;
+  const sender = editsList ? listAddress(current.envelope_from) : null;
+  const domain = sender ? domainOf(sender) : null;
+  const labels = labelsForSpamFolder(stringLabels(current.labels_json), mark.spam);
+  const reasons = withOperatorMark(current.spam_reasons_json);
+  const updatedAt = nowIso();
+  const statements = [
+    env.DB.prepare(
+      `UPDATE messages SET folder = ?, labels_json = ?, spam_verdict = ?, spam_reasons_json = ?, updated_at = ?
+       WHERE id = ? AND tombstoned_at IS NULL RETURNING *`,
+    ).bind(mark.spam ? "spam" : "inbox", JSON.stringify(labels), mark.spam ? "spam" : "ham", JSON.stringify(reasons), updatedAt, messageId),
+    ...spamListStatements(env, {
+      inboxId: current.inbox_id,
+      blockSender: mark.blockSender && sender ? sender : undefined,
+      blockDomain: mark.blockDomain && domain ? domain : undefined,
+      allowSender: mark.allowSender && sender ? sender : undefined,
+      allowDomain: mark.allowDomain && domain ? domain : undefined,
+    }, updatedAt),
+  ];
+  let row: MessageRow | undefined;
+  try {
+    const batch = await env.DB.batch(statements);
+    row = batch[0]?.results?.[0] as MessageRow | undefined;
+  } catch (error) {
+    if (["folder", "spam_verdict", "spam_reasons_json", "inbox_spam_rules"].some((name) => errorMentionsMissingSchema(error, name))) {
+      throw new HttpError(503, "migration_pending", "folder requires migration 0007");
+    }
+    throw error;
+  }
+  if (!row) throw new HttpError(404, "not_found", "Message not found");
+  return json({
+    data: {
+      id: row.id,
+      folder: row.folder === "spam" ? "spam" : "inbox",
+      state: row.agent_state,
+      labels: parseJsonArray(row.labels_json),
+      spam: spamView(row),
+      updated_at: row.updated_at,
+    },
+  });
+}
+
+async function readOptionalObject(request: Request): Promise<Record<string, unknown>> {
+  const declaredLength = Number(request.headers.get("content-length") || "0");
+  if (declaredLength > 65_536) {
+    await request.body?.cancel().catch(() => undefined);
+    throw new HttpError(413, "request_too_large", "Request body is too large");
+  }
+  const bytes = new Uint8Array(await request.arrayBuffer());
+  if (bytes.byteLength === 0) return {};
+  if (bytes.byteLength > 65_536) throw new HttpError(413, "request_too_large", "Request body is too large");
+  try {
+    const parsed = JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new HttpError(400, "invalid_request", "Request body must be a JSON object");
+    }
+    return parsed as Record<string, unknown>;
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
+    throw new HttpError(400, "invalid_json", "Request body must be valid JSON");
+  }
+}
+
+function optionalFlag(input: Record<string, unknown>, name: string): boolean {
+  if (input[name] === undefined) return false;
+  if (typeof input[name] !== "boolean") throw new HttpError(400, "invalid_request", `${name} must be a boolean`);
+  return input[name] === true;
+}
+
+function listAddress(value: string): string {
+  try {
+    return normalizeAddress(value);
+  } catch {
+    throw new HttpError(400, "invalid_request", "Sender address cannot be added to a list");
+  }
+}
+
+function stringLabels(value: string): string[] {
+  return parseJsonArray(value).filter((label): label is string => typeof label === "string");
 }
 
 async function deleteMessage(messageId: string, env: Env): Promise<Response> {
@@ -635,6 +786,8 @@ function serializeMessage(
     replied_at: row.replied_at ?? null,
     last_reply_message_id: row.last_reply_message_id ?? null,
     archived_at: row.archived_at ?? null,
+    folder: row.folder === "spam" ? "spam" : "inbox",
+    spam: spamView(row),
     from: { address: row.envelope_from },
     to: { address: row.envelope_to },
     subject: row.subject,
@@ -649,6 +802,14 @@ function serializeMessage(
     parent_message_id: row.parent_message_id ?? null,
     thread_id: row.thread_id ?? null,
     untrusted_content: true,
+  };
+}
+
+function spamView(row: MessageRow): { verdict: "spam" | "ham" | null; score: number | null; reasons: string[] } {
+  return {
+    verdict: row.spam_verdict === "spam" || row.spam_verdict === "ham" ? row.spam_verdict : null,
+    score: typeof row.spam_score === "number" && Number.isFinite(row.spam_score) ? row.spam_score : null,
+    reasons: parseReasonList(row.spam_reasons_json),
   };
 }
 

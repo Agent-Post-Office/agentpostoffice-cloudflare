@@ -16,6 +16,8 @@ const contract = [
   ["/messages/bulk-delete", "post", "messages:delete"],
   ["/messages/{message_id}", "get", "messages:read"], ["/messages/{message_id}", "patch", "messages:update"],
   ["/messages/{message_id}", "delete", "messages:delete"],
+  ["/messages/{message_id}/mark-spam", "post", "messages:update"],
+  ["/messages/{message_id}/mark-not-spam", "post", "messages:update"],
   ["/messages/{message_id}/reply", "post", "messages:reply"],
   ["/messages/{message_id}/raw", "get", "messages:read"],
   ["/messages/{message_id}/attachments/{attachment_id}", "get", "messages:read"],
@@ -53,7 +55,9 @@ describe("canonical OpenAPI discovery", () => {
     }
     expect(matched.size).toBe(branchCount);
     // A changed predicate shape must be explicitly supported, rather than silently skipped.
-    expect([...source.matchAll(/requireScope\(auth,/g)].length).toBe(branchCount);
+    const scopeCalls = [...source.matchAll(/requireScope\(auth, "([^"]+)"\)/g)];
+    expect(scopeCalls.length - branchCount).toBe(1);
+    expect(source.split("async function applySpamMark(")[1]?.split("\nasync function ")[0]).toContain('requireScope(auth, "inboxes:manage")');
     expect(source).toContain('if (segments[0] === "inboxes") return routeInboxes(');
     expect(source).toContain('if (segments[0] === "messages") return routeMessages(');
     for (const [path, method] of contract) {

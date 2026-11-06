@@ -39,6 +39,10 @@ export interface Env {
   BODY_EXCERPT_BYTES?: string;
   DLQ_NAME?: string;
   AUTOMATION_DLQ_NAME?: string;
+  /** off | tag | quarantine. Unset means tag. */
+  SPAM_FILTER?: string;
+  /** Integer 0-100. Unset means 60. */
+  SPAM_THRESHOLD?: string;
 }
 
 export type QueueTask =
@@ -86,6 +90,10 @@ export interface MessageRow {
   replied_at: string | null;
   last_reply_message_id: string | null;
   archived_at: string | null;
+  folder?: "inbox" | "spam" | null;
+  spam_score?: number | null;
+  spam_reasons_json?: string | null;
+  spam_verdict?: "spam" | "ham" | null;
   tombstoned_at: string | null;
   created_at: string;
   updated_at: string;

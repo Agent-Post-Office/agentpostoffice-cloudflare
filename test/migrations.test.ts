@@ -11,6 +11,7 @@ describe("archive and thread-list migrations", () => {
       "0004_message_replied.sql",
       "0005_message_archived.sql",
       "0006_message_thread_feed.sql",
+      "0007_message_spam.sql",
     ]);
 
     const column = statements("packages/worker/migrations/0005_message_archived.sql");
@@ -20,6 +21,17 @@ describe("archive and thread-list migrations", () => {
     const index = statements("packages/worker/migrations/0006_message_thread_feed.sql");
     expect(index).toMatch(/^CREATE INDEX IF NOT EXISTS messages_thread_feed_idx ON messages \(thread_id,.*received_at, id\);$/);
     expect(index).not.toMatch(/\b(UPDATE|ALTER TABLE|INDEXED BY)\b/i);
+
+    const spam = statements("packages/worker/migrations/0007_message_spam.sql");
+    expect(spam).toContain("ADD COLUMN folder TEXT NOT NULL DEFAULT 'inbox'");
+    expect(spam).toContain("ADD COLUMN spam_score INTEGER");
+    expect(spam).toContain("ADD COLUMN spam_reasons_json TEXT");
+    expect(spam).toContain("ADD COLUMN spam_verdict TEXT");
+    expect(spam).toContain("CREATE TABLE inbox_spam_settings");
+    expect(spam).toContain("CREATE TABLE inbox_spam_rules");
+    expect(spam).toContain("messages_open_inbox_feed_idx");
+    expect(spam).toContain("messages_open_spam_feed_idx");
+    expect(spam).not.toMatch(/\b(UPDATE|DELETE|DROP)\b/i);
   });
 
   it("documents that archive routes need 0005 and the default feed does not", () => {
@@ -36,6 +48,19 @@ describe("archive and thread-list migrations", () => {
     expect(readme).toContain("--unanswered");
     expect(readme).toContain("--thread");
     expect(readme).toContain("--unarchived");
+    expect(upgrading).toContain("0007_message_spam.sql");
+    expect(upgrading).toContain("folder requires migration 0007");
+    expect(readme).toContain("SPAM_FILTER");
+    expect(readme).toContain("SPAM_THRESHOLD");
+    expect(readme).toContain("folder=inbox|spam|all");
+    expect(readme).toContain("score greater than or equal to the threshold");
+    expect(readme).toContain("block_sender");
+    expect(readme).toContain("--folder");
+    expect(readme).toContain("messages spam");
+    expect(upgrading).toContain("messages_open_inbox_feed_idx");
+    expect(upgrading).toContain("does not backfill scores");
+    expect(upgrading).toContain("DROP TABLE IF EXISTS inbox_spam_rules");
+    expect(upgrading).toContain("DELETE FROM d1_migrations WHERE name = '0007_message_spam.sql'");
   });
 });
 

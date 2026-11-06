@@ -37,6 +37,35 @@ describe("message list CLI filters", () => {
       expect(parsed.searchParams.get("state")).toBe("unprocessed");
       expect(parsed.searchParams.get("since")).toBe("2026-07-01T00:00:00.000Z");
       expect(parsed.searchParams.get("order")).toBe("asc");
+      expect(parsed.searchParams.get("folder")).toBeNull();
+    });
+  });
+
+  it("maps --folder and spam marks onto the REST routes", async () => {
+    const seen: Array<{ method: string; url: string; body: string }> = [];
+    await withServer(async (request, response) => {
+      seen.push({ method: request.method || "GET", url: request.url || "", body: await readBody(request) });
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ data: { id: "msg_1", folder: "spam" } }));
+    }, async (url) => {
+      const spamFolder = await invoke(url, ["messages", "list", "--folder", "spam"]);
+      expect(spamFolder.code).toBe(0);
+      const all = await invoke(url, ["messages", "list", "--folder", "all"]);
+      expect(all.code).toBe(0);
+      const invalid = await invoke(url, ["messages", "list", "--folder", "junk"]);
+      expect(invalid.code).toBe(1);
+      expect(invalid.stderr).toContain("--folder must be one of: inbox, spam, all");
+
+      const marked = await invoke(url, ["messages", "spam", "msg_1", "--block-sender", "--block-domain"]);
+      expect(marked.code).toBe(0);
+      const cleared = await invoke(url, ["messages", "not-spam", "msg_1", "--allow-sender"]);
+      expect(cleared.code).toBe(0);
+      expect(seen.map((entry) => ({ method: entry.method, url: entry.url.split("?")[0], query: new URL(entry.url, url).searchParams.get("folder"), body: entry.body }))).toEqual([
+        { method: "GET", url: "/v1/messages", query: "spam", body: "" },
+        { method: "GET", url: "/v1/messages", query: "all", body: "" },
+        { method: "POST", url: "/v1/messages/msg_1/mark-spam", query: null, body: JSON.stringify({ also_block_sender: true, also_block_domain: true }) },
+        { method: "POST", url: "/v1/messages/msg_1/mark-not-spam", query: null, body: JSON.stringify({ also_allow_sender: true }) },
+      ]);
     });
   });
 
@@ -88,6 +117,8 @@ describe("message list CLI filters", () => {
       expect(result.code).toBe(0);
       expect(result.stdout).toContain("Agent Post Office CLI");
       expect(result.stdout).toContain("--unanswered");
+      expect(result.stdout).toContain("--folder");
+      expect(result.stdout).toContain("not-spam");
       expect(result.stderr).toBe("");
     } finally {
       await rm(directory, { recursive: true, force: true });

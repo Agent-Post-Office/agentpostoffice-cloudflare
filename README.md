@@ -117,7 +117,7 @@ if envelope :is "to" "support@example.com" {
 }
 ```
 
-The profile can match envelope and selected header metadata and send static plain-text `vacation` replies. It cannot inspect message bodies, redirect, delete, reject, attach files, select arbitrary recipients, or run code. Standard safety checks suppress replies to mailing lists, bulk mail, automated messages, daemon senders, and the mailbox itself.
+The profile can match envelope and selected header metadata and send static plain-text `vacation` replies. It cannot inspect message bodies, redirect, forward, delete, reject, attach files, select arbitrary recipients, or run code. Standard safety checks suppress replies to mailing lists, bulk mail, automated messages, daemon senders, and the mailbox itself. Mail the spam filter flags in `tag` or `quarantine` mode does not enter this queue, so a vacation reply is not sent. `off` stores the score and leaves this queue unchanged.
 
 Store and activation are separate operations:
 
@@ -184,7 +184,7 @@ Then provision or reuse resources:
 npm run config:generate -- --mail-domain example.com
 ```
 
-Review the ignored `packages/worker/wrangler.jsonc`. Confirm the Worker name, full `MAIL_DOMAIN`, D1 ID, R2 bucket, Queue, DLQ, and Email Sending binding. Existing resources should be reused; renaming the product must not silently recreate storage or lose mailbox state.
+Review the ignored `packages/worker/wrangler.jsonc`. Confirm the Worker name, full `MAIL_DOMAIN`, D1 ID, R2 bucket, Queue, DLQ, and Email Sending binding. `SPAM_FILTER` and `SPAM_THRESHOLD` are optional and default to `tag` and `60`. Existing resources should be reused; renaming the product must not silently recreate storage or lose mailbox state.
 
 Deploy and bootstrap the local credential:
 
@@ -346,15 +346,45 @@ curl -sS -X PATCH https://agentpostoffice.example.workers.dev/v1/messages/msg_12
 
 `archived: true` sets `archived_at` when it is empty and leaves an existing timestamp in place. `archived: false` clears it. Neither changes `state` or `replied_at`.
 
+Spam is a folder, separate from archive. `folder=inbox|spam|all` selects it. The default feed uses inbox, so spam-folder messages stay out until the caller asks for them. `GET /v1/messages/{id}` still returns a spam-folder message, including `folder` and `spam` (`verdict`, `score`, `reasons`).
+
+Inbound mail is scored while it is parsed. `SPAM_FILTER` is `off`, `tag`, or `quarantine` (default `tag`). `SPAM_THRESHOLD` is an integer from 0 to 100 (default `60`). A score greater than or equal to the threshold is spam: with the default, 59 is ham and 60 is spam. Each content signal is at most 19 points, so one signal plus a DMARC failure (40) stays at 59. Flagging needs several signals to agree. `tag` adds the `spam` label and leaves the message in inbox. `quarantine` moves it to the spam folder and adds the same label. `off` stores the score and verdict and does not label, move, or change Sieve. This filter never drops or rejects mail, and it never calls `setReject`. If scoring throws, parsing fails open: the message stays stored, the score columns stay empty, and Sieve still runs. `Authentication-Results` is stored from new deliveries onward. A passing result does not by itself mark mail as spam or as not spam. A missing or unreadable authentication header adds no points. A row in `inbox_spam_settings` overrides the two variables for one inbox (`mode`, `threshold`; a null column inherits the deployment value).
+
+List checks run in this order: sender block, sender allow, domain block, domain allow, then the heuristics. A sender on both the allow list and the block list is spam (`block_sender`). An exact sender allow beats a domain block. An exact sender block beats a domain allow. Domain rules match case-insensitively and include subdomains, so `Example.COM` matches `a@example.com` and `a@sub.example.com`.
+
+`tag` and `quarantine` do not enqueue Sieve for mail they flag. A later Automation Queue task also returns before sending when the message is in the spam folder or carries the `spam` label. `off` does not flag the message, so an active vacation script still runs.
+
+```sql
+INSERT INTO inbox_spam_settings (inbox_id, mode, threshold, updated_at)
+VALUES ('inb_example', 'quarantine', 60, '2026-11-06T00:00:00.000Z')
+ON CONFLICT(inbox_id) DO UPDATE SET
+  mode = excluded.mode,
+  threshold = excluded.threshold,
+  updated_at = excluded.updated_at;
+```
+
+`POST /v1/messages/{id}/mark-spam` and `POST /v1/messages/{id}/mark-not-spam` require `messages:update`. They move `folder` and add or remove the `spam` label. Optional `also_block_sender`, `also_block_domain`, `also_allow_sender`, and `also_allow_domain` edit that inbox's learned lists in `inbox_spam_rules` and also require `inboxes:manage`. If the list scope is missing, the message stays where it was.
+
+```bash
+curl -sS -X POST https://agentpostoffice.example.workers.dev/v1/messages/msg_123/mark-spam \
+  -H "Authorization: Bearer $AGENTPOSTOFFICE_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{"also_block_sender":true}'
+```
+
 ```bash
 node packages/cli/dist/index.js messages list --unanswered --thread <thread-id> --inbox <inbox-id>
 node packages/cli/dist/index.js messages list --archived
 node packages/cli/dist/index.js messages list --unarchived
+node packages/cli/dist/index.js messages list --folder spam
+node packages/cli/dist/index.js messages list --folder all
 node packages/cli/dist/index.js messages archive <message-id>
 node packages/cli/dist/index.js messages unarchive <message-id>
+node packages/cli/dist/index.js messages spam <message-id> --block-sender
+node packages/cli/dist/index.js messages not-spam <message-id> --allow-sender
 ```
 
-`--unanswered` is an alias for `replied=false`. The CLI rejects it with `--direction outbound` before the request, matching the API's `400 invalid_filter` response.
+`--unanswered` is an alias for `replied=false`. The CLI rejects it with `--direction outbound` before the request, matching the API's `400 invalid_filter` response. `--folder` is `inbox`, `spam`, or `all`. Omitting it uses the API default, which is inbox. `messages spam` and `messages not-spam` call the mark routes. `--block-sender`, `--block-domain`, `--allow-sender`, and `--allow-domain` map to the optional list edits and need `inboxes:manage` as well as `messages:update`.
 
 Send and reply requests require an `Idempotency-Key`. Reusing the key with different content returns a conflict; once an attempt begins, that key never sends again.
 
@@ -364,7 +394,7 @@ Send and reply requests require an `Idempotency-Key`. Reusing the key with diffe
 
 Authentication is a bearer token in the form `apo_<key_id>_<secret>`. The key id is 6 to 64 characters from `A-Z`, `a-z`, `0-9`, and `-`. The secret is 40 to 64 characters from `A-Z`, `a-z`, `0-9`, `_`, and `-`. That is the same token the REST API accepts. Do not put it in the URL or in logs.
 
-`tools/list` returns only the tools whose scope that key holds. A tool outside those scopes is disabled, and calling it does not run. Give a remote client the least privilege it needs. Start with `messages:read`. Add `messages:update`, `messages:reply`, or `messages:send` only when that client must acknowledge or archive, reply, or send. A remote client is more exposed to prompt injection from mail than a process on your machine. The other scopes are `messages:delete`, `inboxes:manage`, `sieve:read`, and `sieve:manage`.
+`tools/list` returns only the tools whose scope that key holds. A tool outside those scopes is disabled, and calling it does not run. Give a remote client the least privilege it needs. Start with `messages:read`. Add `messages:update`, `messages:reply`, or `messages:send` only when that client must acknowledge, archive, or mark spam, reply, or send. Blocking or allowing a sender also needs `inboxes:manage`. A remote client is more exposed to prompt injection from mail than a process on your machine. The other scopes are `messages:delete`, `inboxes:manage`, `sieve:read`, and `sieve:manage`.
 
 The CLI does not create keys. Create this client key with the script below after the Worker and its D1 migrations exist. It uses the same local generate, digest, and D1 insert steps as [Create an application token](./docs/INSTALL-REFERENCE.md#5-deploy-migrate-and-create-an-application-token). The label is `mcp-remote`. `APO_SCOPES` defaults to `["messages:read"]`. Export a different JSON array first when this client also needs `messages:update`, `messages:reply`, or `messages:send`. The insert stores the SHA-256 digest and that scopes JSON. It does not contain the raw token. This script does not call `config set`.
 
@@ -463,7 +493,7 @@ Message output is labeled `untrusted_content: true`. `get_attachment` returns on
 | --- | --- |
 | `list_inboxes` | `messages:read` |
 | `poll_messages`, `get_message`, `get_message_html`, `get_attachment_metadata`, `get_attachment` | `messages:read` |
-| `acknowledge_message`, `set_message_archived` | `messages:update` |
+| `acknowledge_message`, `set_message_archived`, `mark_spam`, `mark_not_spam` | `messages:update` |
 | `reply_to_message` | `messages:reply` |
 | `send_message` | `messages:send` |
 | `delete_message`, `delete_messages` | `messages:delete` |

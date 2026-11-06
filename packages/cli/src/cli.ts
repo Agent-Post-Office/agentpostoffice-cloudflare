@@ -126,6 +126,18 @@ async function runMessages(client: AgentPostOfficeClient, action: string | undef
   if ((action === "archive" || action === "unarchive") && ids[0]) {
     return print(await client.updateMessage(ids[0], { archived: action === "archive" }));
   }
+  if (action === "spam" && ids[0]) {
+    return print(await client.markSpam(ids[0], {
+      also_block_sender: flagBoolean(parsed, "block-sender") || undefined,
+      also_block_domain: flagBoolean(parsed, "block-domain") || undefined,
+    }));
+  }
+  if (action === "not-spam" && ids[0]) {
+    return print(await client.markNotSpam(ids[0], {
+      also_allow_sender: flagBoolean(parsed, "allow-sender") || undefined,
+      also_allow_domain: flagBoolean(parsed, "allow-domain") || undefined,
+    }));
+  }
   if (action === "delete" && ids[0]) {
     if (!flagBoolean(parsed, "yes")) throw new Error("Deletion requires --yes");
     return print(await client.deleteMessage(ids[0]));
@@ -149,7 +161,7 @@ async function runMessages(client: AgentPostOfficeClient, action: string | undef
     await saveResponse(await client.downloadAttachment(ids[0], ids[1]), output);
     return print({ saved: output, opened: false, untrusted_content: true });
   }
-  throw new Error("Usage: agentpostoffice messages <list|get|ack|unack|archive|unarchive|delete|bulk-delete|raw|attachment>");
+  throw new Error("Usage: agentpostoffice messages <list|get|ack|unack|archive|unarchive|spam|not-spam|delete|bulk-delete|raw|attachment>");
 }
 
 async function bodyText(parsed: ParsedArguments): Promise<string> {
@@ -215,6 +227,7 @@ function messageListOptions(parsed: ParsedArguments) {
     replied: optionalReplied(parsed, direction),
     threadId: optionalThread(parsed),
     archived: optionalArchived(parsed),
+    folder: optionalEnum(parsed, "folder", ["inbox", "spam", "all"] as const),
     order: optionalEnum(parsed, "order", ["asc", "desc"] as const),
     limit: optionalNumber(parsed, "limit"),
     cursor: optionalString(parsed, "cursor"),
@@ -284,8 +297,10 @@ function printHelp(): void {
   status
   inboxes list|get|create|enable|disable
   sieve list|validate|put|test|activate|disable
-  messages list|get|ack|unack|archive|unarchive|delete|bulk-delete|raw|attachment
-    list: --inbox --state --direction --replied --unanswered --thread --archived --unarchived --since --until --order --limit --cursor
+  messages list|get|ack|unack|archive|unarchive|spam|not-spam|delete|bulk-delete|raw|attachment
+    list: --inbox --state --direction --replied --unanswered --thread --archived --unarchived --folder --since --until --order --limit --cursor
+    spam <id>: --block-sender --block-domain
+    not-spam <id>: --allow-sender --allow-domain
   send --inbox ID --to ADDRESS --subject TEXT --text TEXT
   reply MESSAGE_ID --text TEXT
 

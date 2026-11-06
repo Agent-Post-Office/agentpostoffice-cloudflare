@@ -73,6 +73,8 @@ function operationsFromClient(client: AgentPostOfficeClient): McpOperations {
     listMessages: (options) => client.listMessages(options),
     getMessage: (id, options) => options ? client.getMessage(id, options) : client.getMessage(id),
     updateMessage: (id, update) => client.updateMessage(id, update),
+    markSpam: (id, options) => client.markSpam(id, options),
+    markNotSpam: (id, options) => client.markNotSpam(id, options),
     sendMessage: (input, idempotencyKey) => client.sendMessage(input, idempotencyKey),
     reply: (id, input, idempotencyKey) => client.reply(id, input, idempotencyKey),
     deleteMessage: (id) => client.deleteMessage(id),

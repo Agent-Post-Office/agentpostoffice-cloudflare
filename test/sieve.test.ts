@@ -44,6 +44,7 @@ describe("Agent Post Office Sieve autoresponder profile", () => {
   it("rejects capabilities and delivery actions outside the profile", () => {
     expect(() => compileSieve('require ["redirect"]; redirect "victim@example.net";'))
       .toThrow(SieveValidationError);
+    expect(() => compileSieve('forward "victim@example.net";')).toThrow(SieveValidationError);
     expect(() => compileSieve('require ["body"]; if body :contains "secret" { stop; }'))
       .toThrow(/unsupported/i);
     expect(() => compileSieve('require ["envelope"]; if envelope :regex "to" ".*" { stop; }'))

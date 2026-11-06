@@ -89,6 +89,33 @@ describe("Agent Post Office MCP contract", () => {
     await server.close();
   });
 
+  it("forwards the spam folder and mark tools", async () => {
+    const listMessages = vi.fn(async () => ({ data: [], next_cursor: null }));
+    const markSpam = vi.fn(async () => ({ id: "msg_1", folder: "spam" }));
+    const markNotSpam = vi.fn(async () => ({ id: "msg_1", folder: "inbox" }));
+    const server = createAgentPostOfficeMcpServer({ listMessages, markSpam, markNotSpam } as unknown as AgentPostOfficeClient);
+    const client = new Client({ name: "test", version: "1.0.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    const polled = await client.callTool({ name: "poll_messages", arguments: { folder: "all" } });
+    expect(polled.isError).not.toBe(true);
+    expect(listMessages).toHaveBeenCalledWith(expect.objectContaining({ folder: "all" }));
+    const marked = await client.callTool({
+      name: "mark_spam",
+      arguments: { message_id: "msg_1", also_block_domain: true },
+    });
+    expect(marked.isError).not.toBe(true);
+    expect(markSpam).toHaveBeenCalledWith("msg_1", { also_block_sender: undefined, also_block_domain: true });
+    const cleared = await client.callTool({
+      name: "mark_not_spam",
+      arguments: { message_id: "msg_1", also_allow_sender: true },
+    });
+    expect(cleared.isError).not.toBe(true);
+    expect(markNotSpam).toHaveBeenCalledWith("msg_1", { also_allow_sender: true, also_allow_domain: undefined });
+    await client.close();
+    await server.close();
+  });
+
   it("rejects an absolute download path outside the configured directory", async () => {
     const temporary = await mkdtemp(join(tmpdir(), "agentpostoffice-mcp-"));
     const downloadDirectory = join(temporary, "downloads");

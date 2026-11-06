@@ -1,8 +1,10 @@
 import PostalMime from "postal-mime";
 import { executeAutomationTask } from "./automation.js";
+import { mergeAuthenticationResults, spamFlagged } from "./spam.js";
+import { assessInbound } from "./spam-store.js";
 import { messageIdsFromHeader, resolveThreadLink, trimReferenceIds } from "./threading.js";
 import type { AttachmentRow, Env, MessageRow, QueueTask } from "./types.js";
-import { excerptUtf8, newId, nowIso, sha256Hex } from "./util.js";
+import { errorMentionsMissingSchema, excerptUtf8, newId, nowIso, parseJsonArray, sha256Hex } from "./util.js";
 
 const STORED_REFERENCES_MAX_BYTES = 8_192;
 
@@ -109,6 +111,7 @@ export async function parseMessage(task: Extract<QueueTask, { kind: "parse" }>, 
 
   const replyTo = parsed.replyTo?.[0]?.address || null;
   const headers = JSON.parse(row.headers_json) as Record<string, string>;
+  const authenticationResults = mergeAuthenticationResults(parsed.headers, headers);
   if (parsed.messageId) headers["message-id"] = parsed.messageId.trim();
   if (parsed.inReplyTo) headers["in-reply-to"] = parsed.inReplyTo.trim();
   if (parsed.references) {
@@ -131,10 +134,25 @@ export async function parseMessage(task: Extract<QueueTask, { kind: "parse" }>, 
     }
   }
 
+  const currentLabels = parseJsonArray(row.labels_json).filter((label): label is string => typeof label === "string");
+  let assessed: Awaited<ReturnType<typeof assessInbound>> | null = null;
+  try {
+    assessed = await assessInbound(env, row.inbox_id, {
+      from: row.envelope_from,
+      subject: parsed.subject || row.subject,
+      text,
+      authenticationResults,
+    }, currentLabels);
+  } catch (error) {
+    // Fail open. A scorer error must not drop the message or suppress Sieve.
+    console.error("spam_assess_failed", row.id, error instanceof Error ? error.name : "unknown");
+  }
+  const flagged = assessed ? spamFlagged(assessed.disposition) : false;
+
   const activeScript = await env.DB.prepare(
     "SELECT id, revision FROM sieve_scripts WHERE inbox_id = ? AND active = 1",
   ).bind(row.inbox_id).first<{ id: string; revision: number }>();
-  if (activeScript) {
+  if (activeScript && !flagged) {
     await env.AUTOMATION_QUEUE.send({
       kind: "automate",
       messageId: row.id,
@@ -143,13 +161,7 @@ export async function parseMessage(task: Extract<QueueTask, { kind: "parse" }>, 
     }, { contentType: "json" });
   }
 
-  await env.DB.prepare(
-    `UPDATE messages SET subject = ?, reply_to = ?, text_excerpt = ?, body_truncated = ?,
-      parsed_r2_key = ?, parse_status = 'ready', headers_json = ?,
-      parent_message_id = CASE WHEN ? = 1 THEN ? ELSE parent_message_id END,
-      thread_id = CASE WHEN ? = 1 THEN ? ELSE thread_id END,
-      updated_at = ? WHERE id = ?`,
-  ).bind(
+  const baseBindings = [
     parsed.subject || row.subject,
     replyTo,
     excerpt.text,
@@ -160,9 +172,40 @@ export async function parseMessage(task: Extract<QueueTask, { kind: "parse" }>, 
     link?.parentMessageId ?? null,
     refineThread ? 1 : 0,
     link?.threadId ?? null,
-    nowIso(),
-    row.id,
-  ).run();
+  ];
+  if (!assessed) {
+    await finishParse(env, row.id, baseBindings, null);
+    return;
+  }
+  const spamBindings = [
+    assessed.disposition.folder,
+    JSON.stringify(assessed.disposition.labels),
+    assessed.assessment.score,
+    JSON.stringify(assessed.assessment.reasons),
+    assessed.assessment.verdict,
+  ];
+  try {
+    await finishParse(env, row.id, baseBindings, spamBindings);
+  } catch (error) {
+    const missingScoreColumn = ["folder", "spam_score", "spam_reasons_json", "spam_verdict"]
+      .some((column) => errorMentionsMissingSchema(error, column));
+    if (!missingScoreColumn) throw error;
+    // Score columns arrive in 0007. Parsing still finishes so mail is not stuck pending.
+    await finishParse(env, row.id, baseBindings, null);
+  }
+}
+
+async function finishParse(env: Env, messageId: string, baseBindings: unknown[], spamBindings: unknown[] | null): Promise<void> {
+  const spamSql = spamBindings
+    ? ", folder = ?, labels_json = ?, spam_score = ?, spam_reasons_json = ?, spam_verdict = ?"
+    : "";
+  await env.DB.prepare(
+    `UPDATE messages SET subject = ?, reply_to = ?, text_excerpt = ?, body_truncated = ?,
+      parsed_r2_key = ?, parse_status = 'ready', headers_json = ?,
+      parent_message_id = CASE WHEN ? = 1 THEN ? ELSE parent_message_id END,
+      thread_id = CASE WHEN ? = 1 THEN ? ELSE thread_id END${spamSql},
+      updated_at = ? WHERE id = ?`,
+  ).bind(...baseBindings, ...(spamBindings ?? []), nowIso(), messageId).run();
 }
 
 async function markAutomationFailed(task: Extract<QueueTask, { kind: "automate" }>, env: Env): Promise<void> {

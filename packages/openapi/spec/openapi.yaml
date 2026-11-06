@@ -223,6 +223,10 @@ paths:
           in: query
           description: Limit the feed to messages with or without an archive timestamp. Independent of processed state and replied_at. Omitted means both are returned; archived messages are not hidden by default.
           schema: { type: string, enum: ["true", "false"] }
+        - name: folder
+          in: query
+          description: inbox, spam, or all. Omitted means inbox, so the spam folder stays out of the default feed. Independent of archived_at. all returns both folders. get by id still returns a spam-folder message.
+          schema: { type: string, enum: [inbox, spam, all], default: inbox }
         - { name: since, in: query, schema: { type: string, format: date-time } }
         - { name: until, in: query, schema: { type: string, format: date-time } }
         - { name: order, in: query, schema: { enum: [asc, desc], default: asc } }
@@ -329,6 +333,50 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "202": { description: Tombstoned and deletion queued }
+        "4XX": { $ref: "#/components/responses/ClientError" }
+  /messages/{message_id}/mark-spam:
+    parameters:
+      - $ref: "#/components/parameters/MessageId"
+    post:
+      summary: Move a message to the spam folder
+      operationId: markSpam
+      x-required-scopes: ["messages:update"]
+      description: Requires messages:update. also_block_sender and also_block_domain also require inboxes:manage and edit that inbox's learned block list. If the list scope is missing, the message stays where it was. Mail is not deleted.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                also_block_sender: { type: boolean }
+                also_block_domain: { type: boolean }
+      responses:
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "200": { description: Message is in the spam folder }
+        "4XX": { $ref: "#/components/responses/ClientError" }
+  /messages/{message_id}/mark-not-spam:
+    parameters:
+      - $ref: "#/components/parameters/MessageId"
+    post:
+      summary: Move a message back to inbox
+      operationId: markNotSpam
+      x-required-scopes: ["messages:update"]
+      description: Requires messages:update. also_allow_sender and also_allow_domain also require inboxes:manage and edit that inbox's learned allow list. If the list scope is missing, the message stays where it was.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                also_allow_sender: { type: boolean }
+                also_allow_domain: { type: boolean }
+      responses:
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "200": { description: Message is back in inbox }
         "4XX": { $ref: "#/components/responses/ClientError" }
   /messages/{message_id}/reply:
     parameters:
@@ -466,6 +514,16 @@ components:
         replied_at: { type: [string, "null"], format: date-time }
         last_reply_message_id: { type: [string, "null"] }
         archived_at: { type: [string, "null"], format: date-time }
+        folder:
+          description: inbox or spam. Independent of archived_at. Existing rows default to inbox.
+          enum: [inbox, spam]
+        spam:
+          type: object
+          description: Score stored at parse time, or the verdict set by an operator mark. A passing Authentication-Results header does not by itself decide the verdict.
+          properties:
+            verdict: { enum: [spam, ham, null] }
+            score: { type: [integer, "null"], minimum: 0, maximum: 100 }
+            reasons: { type: array, items: { type: string } }
         from: { type: object, properties: { address: { type: string } } }
         to: { type: object, properties: { address: { type: string } } }
         subject: { type: [string, "null"] }
