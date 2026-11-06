@@ -13,7 +13,7 @@
     "migrate:remote": "wrangler d1 migrations apply agentpostoffice --remote --config wrangler.jsonc"
   },
   "dependencies": {
-    "@agent-post-office/spam-filter": "0.1.0",
+    "@agent-post-office/spam-filter": "0.1.1",
     "@agentpostoffice/sieve": "0.1.0",
     "@modelcontextprotocol/sdk": "1.32.0",
     "postal-mime": "2.7.5",

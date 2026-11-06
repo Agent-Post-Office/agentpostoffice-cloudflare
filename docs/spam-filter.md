@@ -2,7 +2,7 @@
 
 Inbound mail is scored while it is parsed. The score is additive, from 0 to 100. A score greater than or equal to the threshold is spam. With the default threshold, 59 is ham and 60 is spam.
 
-The scorer lives in `packages/spam-filter` (`@agent-post-office/spam-filter`). That package is the source of truth for rules, weights, tokenization, and Bayes. The Worker keeps the D1 schema, marks, block and allow lists, and backfill, and calls the package to score and to compute training deltas.
+The scorer is the npm package `@agent-post-office/spam-filter`, pinned exactly in `packages/worker/package.json` (currently `0.1.1`). The source of truth is https://github.com/Agent-Post-Office/agent-post-office-spam-filter. Rules, weights, tokenization, and Bayes live there. The Worker keeps the D1 schema, marks, block and allow lists, and backfill, and calls the package to score and to compute training deltas. To change scoring, change it in that repository, release a new version (tag push; see its `RELEASING.md`), then bump the exact pin here.
 
 Mail the filter flags in `tag` or `quarantine` mode does not enter the Sieve automation queue. A later automation task also returns before sending when the message is in the spam folder or carries the `spam` label. `off` stores the score and leaves that queue unchanged.
 
@@ -60,7 +60,7 @@ Operator marks do not follow this table. `mark-spam` always sets the folder to `
 
 ## Threshold
 
-The default 60 is the constant `DEFAULT_SPAM_THRESHOLD` in `packages/spam-filter`. It is used when the Worker var and the inbox column are both unset or invalid.
+The default 60 is the constant `DEFAULT_SPAM_THRESHOLD` in `@agent-post-office/spam-filter`. It is used when the Worker var and the inbox column are both unset or invalid.
 
 `SPAM_THRESHOLD` is configurable. It is a Worker var, a string integer from 0 to 100. `inbox_spam_settings.threshold` overrides it for one inbox. The verdict is spam when `score >= threshold`.
 

@@ -2,13 +2,16 @@
 
 ## Monorepo
 
-- `packages/worker`: Cloudflare Worker, D1 migrations, R2/Queue/email bindings.
-- `packages/spam-filter`: source of truth for the spam scorer (`@agent-post-office/spam-filter`). The public repository is the published mirror.
+- `packages/worker`: Cloudflare Worker, D1 migrations, R2/Queue/email bindings. It pins `@agent-post-office/spam-filter` from npm. `src/spam.ts` and `src/spam-bayes.ts` re-export that package. `src/spam-store.ts` is the D1 `SpamStore` adapter. Scoring logic stays out of this repository.
 - `packages/client`: reusable REST client and public TypeScript types.
 - `packages/cli`: local agent/operator CLI.
 - `packages/mcp`: shared MCP tool catalog and the local stdio server. The Worker serves the same tools, except the filesystem saves, at `POST /mcp`.
 - `packages/openapi`: source-of-truth OpenAPI document.
 - `tools`: local provisioning and token-administration helpers.
+
+## Spam scorer
+
+The filter lives in https://github.com/Agent-Post-Office/agent-post-office-spam-filter and ships on npm as `@agent-post-office/spam-filter`. That repository is the source of truth. To change scoring, change it there, release a new version (tag push; see that repository's `RELEASING.md`), then bump the exact pin in `packages/worker/package.json`.
 
 ## Required workflow
 

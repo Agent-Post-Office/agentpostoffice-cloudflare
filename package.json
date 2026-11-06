@@ -12,11 +12,10 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "npm run openapi:check && npm --workspace @agent-post-office/spam-filter run build && npm --workspace @agentpostoffice/sieve run build && npm --workspace @agentpostoffice/client run build && npm --workspace @agentpostoffice/cli run build && npm --workspace @agentpostoffice/mcp run build && npm --workspace @agentpostoffice/worker run build",
-    "check": "npm --workspace @agent-post-office/spam-filter run build && npm --workspace @agentpostoffice/sieve run build && npm --workspace @agentpostoffice/client run build && npm run check --workspaces --if-present && tsc --noEmit -p tsconfig.tools.json && npm run openapi:lint && npm run openapi:check",
+    "build": "npm run openapi:check && npm --workspace @agentpostoffice/sieve run build && npm --workspace @agentpostoffice/client run build && npm --workspace @agentpostoffice/cli run build && npm --workspace @agentpostoffice/mcp run build && npm --workspace @agentpostoffice/worker run build",
+    "check": "npm --workspace @agentpostoffice/sieve run build && npm --workspace @agentpostoffice/client run build && npm run check --workspaces --if-present && tsc --noEmit -p tsconfig.tools.json && npm run openapi:lint && npm run openapi:check",
     "clean": "npm run clean --workspaces --if-present",
-    "test": "npm run test:unit && npm run test:worker && npm run test:spam-filter",
-    "test:spam-filter": "npm --workspace @agent-post-office/spam-filter run test",
+    "test": "npm run test:unit && npm run test:worker",
     "test:unit": "vitest run --config vitest.config.ts",
     "test:worker": "vitest run --config packages/worker/vitest.config.ts && vitest run --config packages/worker/vitest.pre0005.config.ts && vitest run --config packages/worker/vitest.upgrade0007.config.ts && vitest run --config packages/worker/vitest.upgrade0008.config.ts",
     "test:watch": "vitest --config vitest.config.ts",

@@ -137,7 +137,7 @@ Inbound mail is scored from 0 to 100 while it is parsed. A score greater than or
 
 `SPAM_FILTER`, `SPAM_THRESHOLD`, `SPAM_LEARN`, and `SPAM_LEARN_MIN` are Worker variables for the whole instance. Block and allow rules, and an optional mode or threshold override, belong to one inbox. [Spam filter configuration](./docs/spam-filter.md) lists each setting.
 
-The scoring core lives in `packages/spam-filter` (`@agent-post-office/spam-filter`). That package is the source of truth. The public repository at https://github.com/Agent-Post-Office/agent-post-office-spam-filter is the published mirror.
+The scoring core is the npm package `@agent-post-office/spam-filter`, pinned exactly in `packages/worker`. The source of truth is https://github.com/Agent-Post-Office/agent-post-office-spam-filter. To change scoring, change it there, release a new version (tag push; see that repository's `RELEASING.md`), then bump the pin here.
 
 ## Configure Cloudflare application resources
 
