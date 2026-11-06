@@ -66,7 +66,7 @@ describe("spam migration", () => {
 });
 
 describe("spam scoring during parse", () => {
-  it("flags the reported pitches, stores passing authentication results, and leaves a security report alone", async () => {
+  it("stores the reported pitches under the threshold and leaves a security report alone", async () => {
     await stage("msg_seal", "sales@mg.sealkeeper.run", "We tested your MCP server", "We tested your MCP server and wanted to share what we found.", "mg.sealkeeper.run");
     await stage("msg_fixter", "hello@getfixter.com", "Downtime at mcp.agentanalytics.sh", "We noticed downtime at mcp.agentanalytics.sh. Got 15 minutes to walk through it?", "getfixter.com");
     await stage("msg_yandex", "tech.carrot@yandex.ru", "Important Notice: Email Address Verification", "", "yandex.ru");
@@ -77,12 +77,15 @@ describe("spam scoring during parse", () => {
       expect(row.parse_status).toBe("ready");
       expect(row.tombstoned_at).toBeNull();
       expect(row.folder).toBe("inbox");
-      expect(JSON.parse(row.labels_json)).toEqual(["spam"]);
-      expect(row.spam_verdict).toBe("spam");
-      expect(row.spam_score).toBeGreaterThanOrEqual(DEFAULT_SPAM_THRESHOLD);
+      expect(JSON.parse(row.labels_json)).toEqual([]);
+      expect(row.spam_verdict).toBe("ham");
+      expect(row.spam_score).toBeLessThan(DEFAULT_SPAM_THRESHOLD);
       expect(JSON.parse(row.spam_reasons_json ?? "[]")).not.toEqual(expect.arrayContaining([expect.stringMatching(/^auth_/)]));
       expect(JSON.parse(row.headers_json)["authentication-results"]).toMatch(/dmarc=pass/);
     }
+    expect((await stored("msg_seal")).spam_score).toBe(31);
+    expect((await stored("msg_fixter")).spam_score).toBe(42);
+    expect((await stored("msg_yandex")).spam_score).toBe(42);
     const security = await stored("msg_security");
     expect(security.folder).toBe("inbox");
     expect(JSON.parse(security.labels_json)).toEqual([]);
@@ -101,7 +104,7 @@ describe("spam scoring during parse", () => {
 
     await env.DB.prepare("DELETE FROM inbox_spam_settings").run();
     await setSettings("tag", null);
-    await stage("msg_mode", "sales@mg.sealkeeper.run", "We tested your MCP server", "We tested your MCP server.", "mg.sealkeeper.run", {
+    await stage("msg_mode", "sales@mg.example.net", "We tested your MCP server", "We noticed a problem. Got 15 minutes?", "mg.example.net", {
       ...workerEnv,
       SPAM_FILTER: "quarantine",
       SPAM_THRESHOLD: "60",
@@ -110,12 +113,12 @@ describe("spam scoring during parse", () => {
 
     await env.DB.prepare("DELETE FROM inbox_spam_settings").run();
     await setSettings("quarantine", null);
-    await stage("msg_quarantine", "sales@mg.sealkeeper.run", "We tested your MCP server", "We tested your MCP server.", "mg.sealkeeper.run", workerEnv);
+    await stage("msg_quarantine", "sales@mg.example.net", "We tested your MCP server", "We noticed a problem. Got 15 minutes?", "mg.example.net", workerEnv);
     expect(await stored("msg_quarantine")).toMatchObject({ folder: "spam", spam_verdict: "spam", labels_json: '["spam"]' });
 
     await env.DB.prepare("DELETE FROM inbox_spam_settings").run();
     await setSettings("off", null);
-    await stage("msg_off", "sales@mg.sealkeeper.run", "We tested your MCP server", "We tested your MCP server.", "mg.sealkeeper.run", workerEnv);
+    await stage("msg_off", "sales@mg.example.net", "We tested your MCP server", "We noticed a problem. Got 15 minutes?", "mg.example.net", workerEnv);
     const off = await stored("msg_off");
     expect(off.folder).toBe("inbox");
     expect(off.labels_json).toBe("[]");

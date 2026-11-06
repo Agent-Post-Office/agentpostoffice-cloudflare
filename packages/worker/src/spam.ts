@@ -66,6 +66,34 @@ const FREEMAIL_DOMAINS = new Set([
 
 const MARKETING_LABELS = new Set(["click", "em", "ems", "mailer", "marketing", "mg", "mkt", "news", "send"]);
 
+// One content rule stays ham on its own, and stays ham with one authentication
+// failure. The largest auth failure is DMARC fail at 40, so each content
+// weight is at most 19: 19 + 40 = 59, under the default threshold of 60.
+// Authentication weights are unchanged; the content cap holds the rule.
+// cold_audit is the most specific pitch phrase, so it takes the cap.
+// meeting_ask and verification_subject are the next most specific.
+// outreach_opener is a common opener and weighs less.
+// marketing_subdomain and unrelated_incident only count beside a pitch.
+// The three verification extras only count beside a verification subject.
+export const CONTENT_RULE_WEIGHTS = {
+  cold_audit: 19,
+  outreach_opener: 14,
+  meeting_ask: 16,
+  marketing_subdomain: 12,
+  unrelated_incident: 12,
+  verification_subject: 16,
+  urgency_notice: 8,
+  freemail_verification: 8,
+  empty_verification_body: 10,
+} as const;
+
+export const AUTH_FAILURE_WEIGHTS = {
+  auth_dmarc_fail: 40,
+  auth_spf_fail: 20,
+  auth_dkim_fail: 20,
+  auth_spf_softfail: 10,
+} as const;
+
 const COLD_AUDIT = /\bwe tested your\b/i;
 const OUTREACH_OPENER = /\b(?:we|i) (?:noticed|came across|saw that)\b|\bsaw your\b|\bchecking in\b/i;
 const MEETING_ASK = /\b(?:got|have|spare|grab)\s+\d*\s*minutes?\b|\b(?:quick call|hop on a call|jump on a call|book a (?:demo|call|time)|schedule a (?:call|demo|chat))\b/i;
@@ -102,10 +130,10 @@ export function scoreSpam(input: SpamScoreInput): SpamAssessment {
   };
 
   const auth = authenticationSignals(input.authenticationResults);
-  if (auth.dmarc === "fail") add(40, "auth_dmarc_fail");
-  if (auth.spf === "fail") add(20, "auth_spf_fail");
-  if (auth.dkim === "fail") add(20, "auth_dkim_fail");
-  if (auth.spf === "softfail") add(10, "auth_spf_softfail");
+  if (auth.dmarc === "fail") add(AUTH_FAILURE_WEIGHTS.auth_dmarc_fail, "auth_dmarc_fail");
+  if (auth.spf === "fail") add(AUTH_FAILURE_WEIGHTS.auth_spf_fail, "auth_spf_fail");
+  if (auth.dkim === "fail") add(AUTH_FAILURE_WEIGHTS.auth_dkim_fail, "auth_dkim_fail");
+  if (auth.spf === "softfail") add(AUTH_FAILURE_WEIGHTS.auth_spf_softfail, "auth_spf_softfail");
 
   const subject = input.subject ?? "";
   const text = input.text ?? "";
@@ -116,15 +144,15 @@ export function scoreSpam(input: SpamScoreInput): SpamAssessment {
   const verification = VERIFICATION_SUBJECT.test(subject);
   const pitched = coldAudit || outreach || meeting;
 
-  if (coldAudit) add(40, "cold_audit");
-  if (outreach) add(30, "outreach_opener");
-  if (meeting) add(35, "meeting_ask");
-  if (pitched && marketingSubdomain(domain, input.recipientDomain)) add(25, "marketing_subdomain");
-  if (pitched && unrelatedIncident(subject, domain)) add(25, "unrelated_incident");
-  if (verification) add(35, "verification_subject");
-  if (verification && URGENCY_NOTICE.test(subject)) add(15, "urgency_notice");
-  if (verification && domain !== null && FREEMAIL_DOMAINS.has(domain)) add(15, "freemail_verification");
-  if (verification && text.trim().length === 0) add(20, "empty_verification_body");
+  if (coldAudit) add(CONTENT_RULE_WEIGHTS.cold_audit, "cold_audit");
+  if (outreach) add(CONTENT_RULE_WEIGHTS.outreach_opener, "outreach_opener");
+  if (meeting) add(CONTENT_RULE_WEIGHTS.meeting_ask, "meeting_ask");
+  if (pitched && marketingSubdomain(domain, input.recipientDomain)) add(CONTENT_RULE_WEIGHTS.marketing_subdomain, "marketing_subdomain");
+  if (pitched && unrelatedIncident(subject, domain)) add(CONTENT_RULE_WEIGHTS.unrelated_incident, "unrelated_incident");
+  if (verification) add(CONTENT_RULE_WEIGHTS.verification_subject, "verification_subject");
+  if (verification && URGENCY_NOTICE.test(subject)) add(CONTENT_RULE_WEIGHTS.urgency_notice, "urgency_notice");
+  if (verification && domain !== null && FREEMAIL_DOMAINS.has(domain)) add(CONTENT_RULE_WEIGHTS.freemail_verification, "freemail_verification");
+  if (verification && text.trim().length === 0) add(CONTENT_RULE_WEIGHTS.empty_verification_body, "empty_verification_body");
 
   const bounded = Math.min(100, score);
   return { score: bounded, reasons, verdict: verdictForScore(bounded, input.threshold) };

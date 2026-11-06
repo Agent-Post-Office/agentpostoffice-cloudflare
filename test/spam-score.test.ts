@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  AUTH_FAILURE_WEIGHTS,
+  CONTENT_RULE_WEIGHTS,
   DEFAULT_SPAM_MODE,
   DEFAULT_SPAM_THRESHOLD,
   applySpamFilter,
@@ -20,20 +22,20 @@ const EMPTY_LISTS: SpamLists = {
 const PASSING_AUTH = "mx.cloudflare.net; dkim=pass header.d=example.test header.s=s1; spf=pass smtp.mailfrom=bounce@example.test; dmarc=pass header.from=example.test";
 
 describe("spam rules scorer", () => {
-  it("flags the reported cold audit, incident pitch, and verification lure, and leaves a security report alone", () => {
-    const sealkeeper = scoreSpam(message({
+  it("scores the reported pitches under the threshold and leaves a security report alone", () => {
+    const coldAudit = scoreSpam(message({
       from: "sales@mg.sealkeeper.run",
       subject: "We tested your MCP server",
       text: "We tested your MCP server and wanted to share what we found.",
       authenticationResults: PASSING_AUTH.replaceAll("example.test", "mg.sealkeeper.run"),
     }));
-    const fixter = scoreSpam(message({
+    const downtimePitch = scoreSpam(message({
       from: "hello@getfixter.com",
       subject: "Downtime at mcp.agentanalytics.sh",
       text: "We noticed downtime at mcp.agentanalytics.sh. Got 15 minutes to walk through it?",
       authenticationResults: PASSING_AUTH.replaceAll("example.test", "getfixter.com"),
     }));
-    const yandex = scoreSpam(message({
+    const verification = scoreSpam(message({
       from: "tech.carrot@yandex.ru",
       subject: "Important Notice: Email Address Verification",
       text: "",
@@ -46,18 +48,63 @@ describe("spam rules scorer", () => {
       authenticationResults: PASSING_AUTH.replaceAll("example.test", "example.org"),
     }));
 
-    for (const result of [sealkeeper, fixter, yandex]) {
-      expect(result.verdict).toBe("spam");
-      expect(result.score).toBeGreaterThanOrEqual(DEFAULT_SPAM_THRESHOLD);
+    expect(coldAudit).toEqual({
+      score: CONTENT_RULE_WEIGHTS.cold_audit + CONTENT_RULE_WEIGHTS.marketing_subdomain,
+      reasons: ["cold_audit", "marketing_subdomain"],
+      verdict: "ham",
+    });
+    expect(downtimePitch).toEqual({
+      score: CONTENT_RULE_WEIGHTS.outreach_opener + CONTENT_RULE_WEIGHTS.meeting_ask + CONTENT_RULE_WEIGHTS.unrelated_incident,
+      reasons: ["outreach_opener", "meeting_ask", "unrelated_incident"],
+      verdict: "ham",
+    });
+    expect(verification).toEqual({
+      score: CONTENT_RULE_WEIGHTS.verification_subject
+        + CONTENT_RULE_WEIGHTS.urgency_notice
+        + CONTENT_RULE_WEIGHTS.freemail_verification
+        + CONTENT_RULE_WEIGHTS.empty_verification_body,
+      reasons: ["verification_subject", "urgency_notice", "freemail_verification", "empty_verification_body"],
+      verdict: "ham",
+    });
+    for (const result of [coldAudit, downtimePitch, verification]) {
+      expect(result.score).toBeLessThan(DEFAULT_SPAM_THRESHOLD);
       expect(result.reasons.some((reason) => reason.startsWith("auth_"))).toBe(false);
     }
-    expect(sealkeeper.reasons).toEqual(expect.arrayContaining(["cold_audit", "marketing_subdomain"]));
-    expect(fixter.reasons).toEqual(expect.arrayContaining(["outreach_opener", "meeting_ask", "unrelated_incident"]));
-    expect(yandex.reasons).toEqual(expect.arrayContaining(["verification_subject", "freemail_verification", "empty_verification_body"]));
+    expect(securityReport).toEqual({ score: 0, reasons: [], verdict: "ham" });
+  });
 
-    expect(securityReport.verdict).toBe("ham");
-    expect(securityReport.score).toBeLessThan(DEFAULT_SPAM_THRESHOLD);
-    expect(securityReport.reasons).toEqual([]);
+  it("keeps every content rule under the threshold alone and with one auth failure", () => {
+    const content = Object.entries(CONTENT_RULE_WEIGHTS);
+    const failures = Object.entries(AUTH_FAILURE_WEIGHTS);
+    expect(content).toHaveLength(9);
+    expect(failures).toHaveLength(4);
+    expect(Math.max(...failures.map(([, points]) => points))).toBe(AUTH_FAILURE_WEIGHTS.auth_dmarc_fail);
+    for (const [rule, weight] of content) {
+      expect(weight, rule).toBeGreaterThan(0);
+      expect(weight, rule).toBeLessThan(DEFAULT_SPAM_THRESHOLD);
+      for (const [failure, points] of failures) {
+        expect(weight + points, `${rule} + ${failure}`).toBeLessThan(DEFAULT_SPAM_THRESHOLD);
+      }
+    }
+  });
+
+  it("flags a message when several content signals agree", () => {
+    const scored = scoreSpam(message({
+      from: "sales@mg.example.net",
+      subject: "We tested your MCP server",
+      text: "We noticed a problem. Got 15 minutes?",
+      authenticationResults: null,
+    }));
+    const score = CONTENT_RULE_WEIGHTS.cold_audit
+      + CONTENT_RULE_WEIGHTS.outreach_opener
+      + CONTENT_RULE_WEIGHTS.meeting_ask
+      + CONTENT_RULE_WEIGHTS.marketing_subdomain;
+    expect(scored).toEqual({
+      score,
+      reasons: ["cold_audit", "outreach_opener", "meeting_ask", "marketing_subdomain"],
+      verdict: "spam",
+    });
+    expect(score).toBeGreaterThanOrEqual(DEFAULT_SPAM_THRESHOLD);
   });
 
   it("does not let a passing Authentication-Results header decide the verdict", () => {
@@ -81,7 +128,8 @@ describe("spam rules scorer", () => {
     }));
 
     expect(withAuth).toEqual(withoutAuth);
-    expect(withAuth.verdict).toBe("spam");
+    expect(withAuth.verdict).toBe("ham");
+    expect(withAuth.score).toBe(CONTENT_RULE_WEIGHTS.cold_audit + CONTENT_RULE_WEIGHTS.marketing_subdomain);
     expect(ham.verdict).toBe("ham");
     expect(ham.score).toBe(0);
   });
@@ -262,7 +310,7 @@ describe("spam rules scorer", () => {
     }
     expect(scoreSpam(samples[0]!).verdict).toBe("ham");
     expect(scoreSpam(samples[2]!).verdict).toBe("ham");
-    expect(scoreSpam(samples[3]!).verdict).toBe("spam");
+    expect(scoreSpam(samples[3]!).verdict).toBe("ham");
   });
 
   it("resolves deployment defaults, then the per-inbox override", () => {
@@ -292,9 +340,9 @@ describe("spam rules scorer", () => {
 
   it("tags in place, quarantines into the spam folder, and never drops mail when off", () => {
     const spam = scoreSpam(message({
-      from: "sales@mg.sealkeeper.run",
+      from: "sales@mg.example.net",
       subject: "We tested your MCP server",
-      text: "We tested your MCP server.",
+      text: "We noticed a problem. Got 15 minutes?",
     }));
     expect(applySpamFilter("tag", spam, ["billing"])).toEqual({
       folder: "inbox",
