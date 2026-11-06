@@ -5,7 +5,6 @@ export default defineConfig({
   resolve: {
     alias: {
       "@agentpostoffice/client": fileURLToPath(new URL("./packages/client/src/index.ts", import.meta.url)),
-      "@agent-post-office/spam-filter": fileURLToPath(new URL("./packages/spam-filter/src/index.ts", import.meta.url)),
     },
   },
   test: {
