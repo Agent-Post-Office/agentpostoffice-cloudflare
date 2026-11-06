@@ -332,6 +332,24 @@ curl -sS https://agentpostoffice.example.workers.dev/v1/messages?state=unprocess
   -H "Authorization: Bearer $AGENTPOSTOFFICE_TOKEN"
 ```
 
+### Python urllib returns HTTP 403
+
+Cloudflare's Browser Integrity Check on `*.workers.dev` blocks Python's default `urllib` User-Agent (`Python-urllib/3.x`). The edge returns HTTP 403 with body `error code: 1010` and `server: cloudflare` before the Worker runs, including on `/health` and `/mcp`. That body is not the API's `403 insufficient_scope`. A Worker change does not clear it.
+
+Set a descriptive User-Agent, or use `requests` or `httpx`:
+
+```python
+import urllib.request
+
+request = urllib.request.Request(
+    "https://agentpostoffice.example.workers.dev/v1/messages",
+    headers={'User-Agent': 'my-agent/1.0', 'Authorization': 'Bearer <key>'},
+)
+urllib.request.urlopen(request)
+```
+
+Self-hosters on a custom domain can instead add a Cloudflare configuration rule that turns Browser Integrity Check off for the Agent Post Office paths only. The tradeoff is that those paths then skip that check for every client. On `*.workers.dev` the zone setting is Cloudflare's.
+
 A message remains `unprocessed` until explicitly acknowledged:
 
 ```bash
@@ -505,6 +523,8 @@ curl -sS -X POST "https://<your-worker>/mcp" \
   -H "Accept: application/json, text/event-stream" \
   --data '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
 ```
+
+Python `urllib` clients that receive HTTP 403 with body `error code: 1010` are blocked by Cloudflare's Browser Integrity Check on `*.workers.dev` before this endpoint runs. Set a descriptive User-Agent such as `my-agent/1.0`, or use `requests` or `httpx`. See [Python urllib returns HTTP 403](#python-urllib-returns-http-403).
 
 A JSON array body is a JSON-RPC batch and is rejected with HTTP 400. A body larger than 1200000 bytes is rejected with HTTP 413. A tool result larger than 1048576 bytes is refused as `output_too_large` and does not include the payload. That output cap also applies to the local stdio server. There is no separate application rate limit and no browser CORS on `/mcp`.
 

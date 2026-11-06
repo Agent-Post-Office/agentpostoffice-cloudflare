@@ -298,11 +298,31 @@ A vault-fill-only browser credential cannot automatically be used in a shell or 
 
 An actual test email requires explicit operator approval. Reusing an idempotency key with changed content returns a conflict; after an attempt starts, that key does not send again. Do not automatically retry failed or uncertain sends with a new key. `accepted` confirms Cloudflare acceptance, not delivery; verify actual receipt separately.
 
+### Python urllib returns HTTP 403
+
+Cloudflare's Browser Integrity Check on `*.workers.dev` blocks Python's default `urllib` User-Agent (`Python-urllib/3.x`). The edge returns HTTP 403 with body `error code: 1010` and `server: cloudflare` before the Worker runs, including on `/health` and `/mcp`. That body is not the API's `403 insufficient_scope`. A Worker change does not clear it.
+
+Set a descriptive User-Agent, or use `requests` or `httpx`:
+
+```python
+import urllib.request
+
+request = urllib.request.Request(
+    "https://agentpostoffice.example.workers.dev/v1/messages",
+    headers={'User-Agent': 'my-agent/1.0', 'Authorization': 'Bearer <key>'},
+)
+urllib.request.urlopen(request)
+```
+
+Self-hosters on a custom domain can instead add a Cloudflare configuration rule that turns Browser Integrity Check off for the APO paths only. The tradeoff is that those paths then skip that check for every client. On `*.workers.dev` the zone setting is Cloudflare's.
+
 ## 8. Configure MCP
 
 ### Remote HTTP
 
 `POST /mcp` is part of the Worker deployed above. No second service is required. Point a client at `https://<your-worker>/mcp` with `Authorization: Bearer apo_<key_id>_<secret>`. The header is the only credential. Add `messages:update`, `messages:reply`, or `messages:send` to `APO_SCOPES` only when that client needs them. The [README Remote MCP section](../README.md#remote-mcp) lists every tool, the required `Accept` header, and the body and output limits.
+
+Python `urllib` clients that receive HTTP 403 with body `error code: 1010` are blocked by Cloudflare's Browser Integrity Check on `*.workers.dev` before the Worker runs. Set a descriptive User-Agent such as `my-agent/1.0`, or use `requests` or `httpx`. See [Python urllib returns HTTP 403](#python-urllib-returns-http-403).
 
 #### Create a remote MCP key
 
